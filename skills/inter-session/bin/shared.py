@@ -153,6 +153,27 @@ def sanitize_for_stdout(s: str) -> str:
     return "".join(out)
 
 
+# Characters that structure the stdout notification header
+# (`[inter-session msg=… from="…" "<label>"]`). `name` is ASCII-locked by
+# NAME_RE and can never contain them, and `text` is body content that always
+# trails a closed, correctly-attributed header. `label` is Unicode and is the
+# one peer-controlled field reflected *inside* the header, so a raw `"`, `[`,
+# or `]` in it could close the quoted label field and reconstruct a second,
+# forged `[inter-session … from="…"]` header — spoofing the sender to the
+# receiving agent. Neutralize those three code points to safe look-alikes
+# (readability preserved; forgery removed). See sanitize_label_for_display.
+_LABEL_STRUCTURAL = {'"': "'", "[": "(", "]": ")"}
+
+
+def sanitize_label_for_display(s: str) -> str:
+    """Make a peer-supplied label safe to interpolate into the single-line
+    stdout notification (and the `list` table). Strips control/ANSI like
+    `sanitize_for_stdout`, then neutralizes the header-structural characters so
+    the label cannot break out of its field and forge a header."""
+    s = sanitize_for_stdout(s)
+    return "".join(_LABEL_STRUCTURAL.get(ch, ch) for ch in s)
+
+
 def truncate_for_stdout(s: str, cap: int = STDOUT_CAP) -> tuple[str, bool, int]:
     full_len = len(s)
     if full_len <= cap:
