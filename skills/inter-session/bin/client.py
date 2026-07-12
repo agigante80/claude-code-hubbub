@@ -37,7 +37,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from bin import shared, spawn
+from bin import shared, spawn, profile
 
 log = logging.getLogger("inter-session.client")
 
@@ -68,33 +68,10 @@ def _format_truncation_pointer(msg_id: str, full_len: int) -> str:
 
 
 def _write_session_state(ppid: int, state: dict) -> None:
-    """Atomic write: create a sibling tempfile, fchmod 0600, fsync, then
-    os.replace. This prevents helpers from observing a partially-written
-    state file (the previous direct `write_text` was non-atomic).
-    """
-    import tempfile
+    """Atomically write the listener state file (0600), so helpers never
+    observe a partially-written file."""
     shared.secure_dir(shared.clients_dir())
-    path = shared.client_session_path(ppid)
-    parent = path.parent
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=path.name + ".", suffix=".tmp", dir=str(parent),
-    )
-    try:
-        os.fchmod(fd, 0o600)
-        os.write(fd, (json.dumps(state) + "\n").encode("utf-8"))
-        os.fsync(fd)
-        os.close(fd)
-        os.replace(tmp_path, str(path))
-    except OSError:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    shared.atomic_write_text(shared.client_session_path(ppid), json.dumps(state) + "\n")
 
 
 def _delete_session_state(ppid: int) -> None:
@@ -389,7 +366,9 @@ def main() -> int:
         "CLAUDE_PLUGIN_OPTION_PORT", "INTER_SESSION_PORT", default=shared.DEFAULT_PORT,
     ))
     parser.add_argument("--name", default=os.environ.get("INTER_SESSION_NAME", ""))
-    parser.add_argument("--label", default=os.environ.get("INTER_SESSION_LABEL", ""))
+    # Default None (not "") so we can tell "flag absent" (→ load the persisted
+    # per-project label) apart from an explicit "--label ''" (→ clear it).
+    parser.add_argument("--label", default=None)
     parser.add_argument("--idle-shutdown-minutes", type=float, default=_env_float(
         "CLAUDE_PLUGIN_OPTION_IDLE_SHUTDOWN_MINUTES", "INTER_SESSION_IDLE_MINUTES",
         default=10,
@@ -404,9 +383,23 @@ def main() -> int:
     if args.name and not shared.validate_name(args.name):
         _print_line(f"[inter-session] invalid name {args.name!r}")
         return 1
-    if not shared.validate_label(args.label):
-        _print_line(f"[inter-session] invalid label {args.label!r}")
-        return 1
+
+    # Label resolution + per-project persistence (see bin/profile.py):
+    #   --label X                       → use X and persist it ('' clears)
+    #   $INTER_SESSION_LABEL (non-empty) → runtime override, NOT persisted
+    #   neither                          → load the persisted per-project label
+    if args.label is not None:
+        if not shared.validate_label(args.label):
+            _print_line(f"[inter-session] invalid label {args.label!r}")
+            return 1
+        final_label = profile.resolve_label(args.label)
+    elif os.environ.get("INTER_SESSION_LABEL"):
+        final_label = os.environ["INTER_SESSION_LABEL"]
+        if not shared.validate_label(final_label):
+            _print_line(f"[inter-session] invalid label {final_label!r}")
+            return 1
+    else:
+        final_label = profile.resolve_label(None)
 
     # Plugin auto-start path: monitors.json doesn't pass --name (so the user
     # doesn't have to set INTER_SESSION_NAME). Fall back to a name derived from
@@ -423,7 +416,7 @@ def main() -> int:
             )
 
     client = Client(
-        host=args.host, port=args.port, name=final_name, label=args.label,
+        host=args.host, port=args.port, name=final_name, label=final_label,
         idle_shutdown_minutes=args.idle_shutdown_minutes,
         verbose=args.verbose,
     )
