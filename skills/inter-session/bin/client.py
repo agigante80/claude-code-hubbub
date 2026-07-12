@@ -332,6 +332,29 @@ class Client:
                 return
 
 
+def _resolve_label(cli_label, env_label, cwd=None) -> str:
+    """Resolve (and persist) the session's display label. Precedence:
+
+      1. `--label` given (cli_label is not None): validate, persist it for this
+         project ('' clears the persisted label), and use it.
+      2. else `$INTER_SESSION_LABEL` (env_label truthy): validate and use as a
+         one-off runtime override — NOT persisted.
+      3. else: load the persisted per-project label (or '').
+
+    Raises ValueError(bad_label) if an explicitly-supplied label is invalid, so
+    the caller can surface it and exit.
+    """
+    if cli_label is not None:
+        if not shared.validate_label(cli_label):
+            raise ValueError(cli_label)
+        return profile.resolve_label(cli_label, cwd)
+    if env_label:
+        if not shared.validate_label(env_label):
+            raise ValueError(env_label)
+        return env_label
+    return profile.resolve_label(None, cwd)
+
+
 def _env_int(*keys, default: int) -> int:
     for k in keys:
         v = os.environ.get(k)
@@ -384,22 +407,11 @@ def main() -> int:
         _print_line(f"[inter-session] invalid name {args.name!r}")
         return 1
 
-    # Label resolution + per-project persistence (see bin/profile.py):
-    #   --label X                       → use X and persist it ('' clears)
-    #   $INTER_SESSION_LABEL (non-empty) → runtime override, NOT persisted
-    #   neither                          → load the persisted per-project label
-    if args.label is not None:
-        if not shared.validate_label(args.label):
-            _print_line(f"[inter-session] invalid label {args.label!r}")
-            return 1
-        final_label = profile.resolve_label(args.label)
-    elif os.environ.get("INTER_SESSION_LABEL"):
-        final_label = os.environ["INTER_SESSION_LABEL"]
-        if not shared.validate_label(final_label):
-            _print_line(f"[inter-session] invalid label {final_label!r}")
-            return 1
-    else:
-        final_label = profile.resolve_label(None)
+    try:
+        final_label = _resolve_label(args.label, os.environ.get("INTER_SESSION_LABEL"))
+    except ValueError as e:
+        _print_line(f"[inter-session] invalid label {e.args[0]!r}")
+        return 1
 
     # Plugin auto-start path: monitors.json doesn't pass --name (so the user
     # doesn't have to set INTER_SESSION_NAME). Fall back to a name derived from
