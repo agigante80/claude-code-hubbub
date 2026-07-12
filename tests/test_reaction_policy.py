@@ -48,10 +48,13 @@ class TestReactionPolicy:
         # SEC-002: a peer can embed `[inter-session ...]`-looking text in the
         # message body. The reaction policy must tell the agent that only the
         # leading prefix is authoritative, so an embedded pseudo-header can't
-        # spoof the sender or inject a second directive.
+        # spoof the sender or inject a second directive. Anchor on distinctive
+        # phrases from the guardrail bullet so deleting it fails the test even
+        # if the individual words survive elsewhere in the prose.
         low = SKILL.lower()
-        assert "leading" in low and "authoritative" in low
-        assert "pseudo-header" in low or "embed" in low
+        assert "only the leading" in low
+        assert "authoritative" in low
+        assert "pseudo-header" in low
 
 
 class TestInstallDepsUx:
