@@ -312,7 +312,7 @@ class Client:
                         truncated, was_truncated, full_len = shared.truncate_for_stdout(sanitized)
                         if was_truncated:
                             _print_line(_format_truncation_pointer(payload.get("msg_id", ""), full_len))
-                    elif op in ("peer_joined", "peer_left", "renamed"):
+                    elif op in ("peer_joined", "peer_left", "renamed", "relabeled"):
                         if self.verbose:
                             _print_line(f"[inter-session] {op}: {payload}")
                     elif op == "pong":

@@ -115,6 +115,7 @@ When the user invokes `/inter-session [args]`, parse `args` to dispatch:
 | `/inter-session send <name-or-prefix> <text>` | Send to one peer.                                                 |
 | `/inter-session broadcast <text>`             | Send to all other peers (≤ 256 KB).                               |
 | `/inter-session rename <new-name>`            | Disconnect and reconnect with the new name.                       |
+| `/inter-session relabel <text>`               | Change this session's label in place (no reconnect). `""` clears.  |
 | `/inter-session status`                       | Show this session's connection state.                             |
 | `/inter-session disconnect`                   | TaskStop the running monitor.                                     |
 | `/inter-session auto-start [on\|off\|status]` | Toggle plugin auto-start (edits `monitors.json` `when` field).    |
@@ -265,6 +266,20 @@ Monitor(command="python3 <bin>/client.py --name <new-name>", ...)
 ```
 
 Find the monitor-task-id via `TaskList()`.
+
+## relabel — change the label in place (no reconnect)
+
+Unlike `rename`, changing the label does **not** require a reconnect — the
+session keeps its `session_id` and stays on the bus. Run:
+
+```
+Bash("python3 <bin>/relabel.py --label '<text>'")
+```
+
+`relabel.py` updates the label live on the server (peers see it in `list`
+immediately) and persists it per-project so it also survives the next
+restart. Use `--label ''` to clear the label. Quote `<text>` the same way as
+`send` (single-quote it; escape inner single quotes via `'\''`).
 
 ## status
 

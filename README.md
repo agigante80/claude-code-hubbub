@@ -239,10 +239,12 @@ collaboration.
 | :------------------------------------------------------------- | :------------------------------------------------------------- |
 | `/inter-session:inter-session`                                 | Connect (alias for `connect`).                                 |
 | `/inter-session:inter-session connect [name]`                  | Connect to the bus; `name` proposed from context if omitted.   |
+| `/inter-session:inter-session install-deps`                    | Install runtime deps (websockets, psutil) into an isolated venv. |
 | `/inter-session:inter-session list`                            | List connected sessions.                                       |
 | `/inter-session:inter-session send <name> <text>`              | Send a message to one session.                                 |
 | `/inter-session:inter-session broadcast <text>`                | Send to all other sessions (≤ 256 KB).                         |
 | `/inter-session:inter-session rename <new-name>`               | Rename — implemented as disconnect + reconnect.                |
+| `/inter-session:inter-session relabel <text>`                  | Change this session's label in place (no reconnect); `""` clears. Persists per project. |
 | `/inter-session:inter-session status`                          | Heuristic connection state.                                    |
 | `/inter-session:inter-session disconnect`                      | Stop the monitor.                                              |
 | `/inter-session:inter-session auto-start [on\|off\|status]`    | Toggle auto-start. `on` = start at every session; `off` = lazy (default). Apply with `/reload-plugins`. |
@@ -263,6 +265,14 @@ it is reused automatically on the next restart without re-passing the flag:
 - `--label ""` — clear the persisted label.
 - `INTER_SESSION_LABEL` — a one-off runtime override; used but **not**
   persisted.
+
+To change the label of an already-connected session **without reconnecting**
+(keeping the same `session_id`), use `relabel` — it updates the label live for
+all peers and persists it too:
+
+```
+/inter-session relabel "the controller"     # "" clears it
+```
 
 ## Plugin configuration
 
