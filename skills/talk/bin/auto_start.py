@@ -95,19 +95,30 @@ def _atomic_write(path: Path, data: str) -> None:
         raise
 
 
-def _set_optout(off: bool) -> None:
+def _set_optout(off: bool) -> tuple[bool, bool]:
     """Mirror the setting into the data dir, which `/plugin update` cannot
     overwrite. See shared.autostart_optout_path for why the plugin file alone
-    is not enough."""
+    is not enough.
+
+    Returns (ok, changed). Never raises: this is one of two half-independent
+    writes, and a failure here must not stop the other one from being applied.
+    """
     path = shared.autostart_optout_path()
-    if off:
-        # secure_dir, not a bare mkdir: on a fresh machine whose first hubbub
-        # command is `auto-start off` this creates the data dir, and the
-        # bearer token gets minted inside it later.
-        shared.secure_dir(path.parent)
-        path.touch()
-    else:
-        path.unlink(missing_ok=True)
+    try:
+        existed = path.exists()
+        if off:
+            # secure_dir, not a bare mkdir: on a fresh machine whose first
+            # hubbub command is `auto-start off` this creates the data dir,
+            # and the bearer token gets minted inside it later.
+            if not shared.secure_dir(path.parent):
+                raise OSError(f"could not create {path.parent}")
+            path.touch()
+        else:
+            path.unlink(missing_ok=True)
+        return True, existed != off
+    except OSError as e:
+        print(f"auto-start: could not update {path}: {e}", file=sys.stderr)
+        return False, False
 
 
 def cmd_status() -> int:
@@ -135,26 +146,56 @@ def cmd_status() -> int:
 
 
 def cmd_set(target: str) -> int:
-    # Durable flag first. _resolve_monitors_path() exits when the plugin file
-    # is missing and _atomic_write fails on a read-only plugin dir — and a
-    # plugin directory in flux is precisely the case this flag exists for, so
-    # gating it behind that write would drop the setting exactly when it
-    # matters most.
-    _set_optout(target == LAZY)
+    # Locate and validate the manifest BEFORE touching durable state. These
+    # three exit(2) on a missing or malformed file, and a standalone-skill copy
+    # legitimately has no monitors.json — it governs no plugin monitor, so it
+    # must not reach over and flip the flag a *plugin* install reads. Doing the
+    # flag first meant `auto-start on` run from such a copy deleted the opt-out
+    # (re-enabling the plugin's always-on monitor) and then exited 2, telling
+    # the user it had failed.
     path = _resolve_monitors_path()
     monitors = _load(path)
     entry = _find_entry(monitors)
     prev = entry.get("when", "always")
-    if prev == target:
-        # The durable flag was already reasserted above, which matters: a
-        # plugin update can restore the shipped `when` while leaving the
-        # data-dir opt-out stale, or vice versa.
+
+    # From here the two halves are applied independently. Neither is allowed to
+    # abort the other: the durable flag is what survives `/plugin update`, and
+    # the manifest is what CC actually reads at session open. Ordering them
+    # differently only chooses which one gets dropped when the other fails.
+    optout_ok, optout_changed = _set_optout(target == LAZY)
+
+    when_now, manifest_ok = prev, True
+    if prev != target:
+        entry["when"] = target
+        try:
+            _atomic_write(path, json.dumps(monitors, indent=2) + "\n")
+            when_now = target
+        except OSError as e:
+            manifest_ok = False
+            print(f"auto-start: could not update {path}: {e}", file=sys.stderr)
+
+    if target == LAZY:
+        # Either half alone is enough to be off: the flag makes client.py exit
+        # at once even when CC still starts it.
+        effective = optout_ok or when_now == LAZY
+    else:
+        # On needs both: a lingering flag would exit the monitor CC just spawned.
+        effective = optout_ok and when_now == ALWAYS
+
+    if when_now != prev:
+        print(f"auto-start: {prev!r} -> {target!r}")
+        print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
+    elif optout_changed:
+        # Not "no change": the durable flag moved even though `when` already
+        # matched — the state after a `/plugin update` restored the shipped
+        # value while leaving the data-dir flag behind.
+        print(f"auto-start: {target!r}; saved setting updated")
+    elif manifest_ok and optout_ok:
         print(f"auto-start: already {target!r}; no change")
-        return 0
-    entry["when"] = target
-    _atomic_write(path, json.dumps(monitors, indent=2) + "\n")
-    print(f"auto-start: {prev!r} -> {target!r}")
-    print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
+
+    if not effective:
+        print(f"auto-start: could not apply {target!r}", file=sys.stderr)
+        return 1
     return 0
 
 

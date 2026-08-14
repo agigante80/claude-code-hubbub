@@ -187,6 +187,11 @@ class TestDependencyGuard:
             assert "import psutil" in head, (
                 f"{name}: psutil missing from the guarded import block"
             )
+            # Inside the try, not merely above it — an unguarded import
+            # aborts before main() exactly like the websockets one did.
+            assert "\nimport psutil\n" not in src, (
+                f"{name}: unguarded module-level `import psutil`"
+            )
 
     def test_no_dead_reimport_in_main_block(self):
         for name in self.ENTRY_POINTS:

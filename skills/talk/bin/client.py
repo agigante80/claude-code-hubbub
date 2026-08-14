@@ -440,9 +440,15 @@ def main() -> int:
 
     if _MISSING_DEP is not None:
         if args.from_monitor:
-            # Auto-started in a session that may never touch the bus. Nagging
-            # about install-deps at every session open is noise; the user gets
-            # the actionable message when they actually invoke the skill.
+            # Auto-started in a session that may never touch the bus, so this
+            # must not become a notification at every session open. stderr
+            # still lands in the monitor's output file, which is the
+            # difference between "quiet" and "no trace anywhere" — a
+            # half-finished install-deps (websockets built, psutil didn't)
+            # would otherwise show up only as a monitor that exits instantly
+            # in every session, with nothing saying why.
+            print(f"[inter-session] dependencies missing — run "
+                  f"/hubbub:talk install-deps ({_MISSING_DEP})", file=sys.stderr)
             return 0
         _print_line(f"[inter-session] dependencies missing — run /hubbub:talk install-deps ({_MISSING_DEP})")
         return 0
