@@ -1551,3 +1551,87 @@ class TestClientFallbackProgresses:
             assert nxt not in tried, f"re-offered {nxt}"
             tried.add(nxt)
             name = nxt
+
+
+class TestSuffixOnlyStrippedWhenItLooksGenerated:
+    """Stripping any trailing -<digits> rewrote a legitimate name into an
+    unrelated one: a session in ~/src/release-2024 registered as `release-2`,
+    which collides with what a session in ~/src/release would be handed — and
+    `send --to release-2` then reaches the wrong repo's session."""
+
+    def test_year_like_suffix_is_kept(self):
+        assert shared.suffixed_name_candidates("release-2024")[0] == "release-2024-2"
+
+    def test_large_numeric_suffix_is_kept(self):
+        assert shared.suffixed_name_candidates("v-100")[0] == "v-100-2"
+
+    def test_our_own_suffix_is_stripped_so_it_progresses(self):
+        assert shared.suffixed_name_candidates("web-2")[0] == "web-3"
+        assert "web-2" not in shared.suffixed_name_candidates("web-2")
+
+    def test_long_name_chain_still_progresses(self):
+        name, tried = "a" * 40, {"a" * 40}
+        for _ in range(5):
+            nxt = shared.suffixed_name_candidates(name, taken=tried)[0]
+            assert nxt not in tried
+            assert shared.validate_name(nxt)
+            tried.add(nxt)
+            name = nxt
+
+
+class TestUnmigratedFollowsWhereStateIs:
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(shared, "_unmigrated_this_run", False)
+        self.legacy = tmp_path / ".claude" / "data" / "inter-session"
+        self.new = tmp_path / ".claude" / "data" / "hubbub"
+
+    def test_a_recreated_legacy_dir_does_not_orphan_our_migrated_state(self):
+        """We migrated (marker present), then an older build recreated
+        inter-session/ as a real directory with its own token. Answering by
+        directory type sent us back to read *their* token and orphan ours."""
+        self.new.mkdir(parents=True)
+        (self.new / shared.MIGRATION_MARKER).touch()
+        (self.new / "token").write_text("ours")
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("theirs")
+        assert shared._still_on_legacy(self.legacy, self.new) is False
+        shared.__dict__["_unmigrated_this_run"] = True
+        try:
+            assert shared.data_dir() == self.new
+        finally:
+            shared.__dict__["_unmigrated_this_run"] = False
+
+    def test_no_marker_means_state_is_still_on_legacy(self):
+        self.new.mkdir(parents=True)
+        self.legacy.mkdir(parents=True)
+        assert shared._still_on_legacy(self.legacy, self.new) is True
+
+
+class TestMigrationErrorsReachTheReporter:
+    """`migrate_legacy_data_dir` runs before argument parsing in every
+    entry-point, so its hard failures — the ones that say "resolve by hand" —
+    were only ever written to stderr, which for an auto-started monitor is a
+    file nobody opens."""
+
+    def test_reporter_receives_hard_failures(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(shared, "_migration_reporter", seen.append)
+        shared._migration_error("cannot merge X into Y")
+        assert seen and "cannot merge" in seen[0]
+        assert seen[0].startswith("[inter-session]")
+
+    def test_informational_stays_on_stderr(self, monkeypatch, capsys):
+        seen = []
+        monkeypatch.setattr(shared, "_migration_reporter", seen.append)
+        shared._migration_warn("superseded ['venv'] moved aside")
+        assert seen == []
+        assert "superseded" in capsys.readouterr().err
+
+    def test_falls_back_to_stderr_without_a_reporter(self, monkeypatch, capsys):
+        monkeypatch.setattr(shared, "_migration_reporter", None)
+        shared._migration_error("boom")
+        assert "boom" in capsys.readouterr().err

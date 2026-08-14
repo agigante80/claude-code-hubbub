@@ -394,6 +394,13 @@ class Client:
                     f"[inter-session] unexpected hello response: {welcome}")
                 return
 
+            # Budget is per-collision-episode, not per-process. The monitor now
+            # lives for the whole session and reconnects across every server
+            # restart and idle-shutdown, so without this a session that
+            # resolved three *separate* collisions over some hours would treat
+            # the fourth as exhaustion and drop off the bus for good.
+            self._collision_retries = 0
+
             _write_session_state(self.ppid, {
                 "session_id": self.session_id,
                 "name": self.name,
@@ -487,6 +494,10 @@ def _env_float(*keys, default: float) -> float:
 
 
 def main() -> int:
+    # Our stdout is the notification channel, so hard migration failures —
+    # the ones that say "resolve by hand" — should reach it rather than dying
+    # in the monitor's output file. Informational ones stay on stderr.
+    shared.set_migration_reporter(_print_line)
     # Move ~/.claude/data/inter-session → …/hubbub if this install predates
     # the rename. No-op once done; leaves a symlink so older builds still
     # running on this machine share one token/lock/pidfile with us.

@@ -126,7 +126,7 @@ def _acquire_migration_lock(timeout_s: float = 5.0) -> int | None:
         # now — so it returns hubbub/ while the live state stays under
         # inter-session/, the next ensure_token() mints a fresh token there,
         # and connected peers start getting `unauthorized`.
-        _migration_warn(f"could not open {path}: {e}; not migrating")
+        _migration_error(f"could not open {path}: {e}; not migrating")
         return None
     deadline = time.monotonic() + timeout_s
     while True:
@@ -181,7 +181,7 @@ def migrate_legacy_data_dir() -> None:
         # Another process holds it, or we cannot lock at all. Either way,
         # racing it is what this lock exists to prevent — but we must also not
         # start writing into the new path behind whoever is migrating.
-        _note_unmigrated(legacy)
+        _note_unmigrated(legacy, new)
         return
     try:
         if _migration_complete(legacy, new):
@@ -193,7 +193,7 @@ def migrate_legacy_data_dir() -> None:
                 # this install if the symlink is later lost.
                 _mark_migrated(new)
             else:
-                _migration_warn(f"{legacy} is a symlink to {legacy.resolve()}, "
+                _migration_error(f"{legacy} is a symlink to {legacy.resolve()}, "
                                 f"not {new}; leaving it alone")
             return
         if legacy.is_dir():
@@ -245,7 +245,7 @@ def migrate_legacy_data_dir() -> None:
             # to finish — and the dead one leaves the state the repair branch
             # cannot fix, which is precisely what deserves a warning.
             return
-        _migration_warn(f"could not migrate {legacy} → {new}: {e}")
+        _migration_error(f"could not migrate {legacy} → {new}: {e}")
     finally:
         os.close(lock_fd)
         # From the state on disk, not from which branch we took. Winning the
@@ -253,7 +253,7 @@ def migrate_legacy_data_dir() -> None:
         # leaves the legacy directory holding the live token just as surely as
         # never getting the lock does, and those paths used to fall through
         # with the flag still clear.
-        _note_unmigrated(legacy)
+        _note_unmigrated(legacy, new)
 
 
 # Regenerable artifacts: colliding copies of these can be set aside without
@@ -293,7 +293,7 @@ def _drain_into(src: Path, dst: Path) -> bool:
         # Both sides hold real bus state under the same name, so the fork has
         # already happened. Picking a winner would silently destroy one side's
         # session; a human has to say which token is the live one.
-        _migration_warn(
+        _migration_error(
             f"cannot merge {src} into {dst}: both hold {sorted(live)}. Old and "
             f"new builds will use separate tokens until this is resolved by hand."
         )
@@ -330,7 +330,7 @@ def _drain_into(src: Path, dst: Path) -> bool:
                 return True
             _migration_warn(f"could not move {e.name} out of {src}: {err}")
             _rollback(moved)
-            _migration_warn(f"leaving {src} in place; live state must not be "
+            _migration_error(f"leaving {src} in place; live state must not be "
                             f"relocated behind a running bus")
             return False
 
@@ -358,7 +358,7 @@ def _drain_into(src: Path, dst: Path) -> bool:
     except OSError as err:
         if _migration_complete(src, dst):
             return True
-        _migration_warn(f"could not finish draining {src}: {err}")
+        _migration_error(f"could not finish draining {src}: {err}")
         _rollback(moved)
         return False
     return True
@@ -425,7 +425,7 @@ def _link_legacy(legacy: Path, new: Path) -> None:
         legacy.symlink_to(new)
     except FileExistsError:
         if not _legacy_points_at(legacy, new):
-            _migration_warn(
+            _migration_error(
                 f"{legacy} reappeared as a real directory while migrating to "
                 f"{new}; an older build has recreated it with its own token. "
                 f"Old and new builds will use separate tokens until one of "
@@ -459,7 +459,8 @@ def _rollback(moved: list[tuple[Path, Path]]) -> None:
         try:
             os.rename(dest, origin)
         except OSError as back:
-            _migration_warn(f"could not put {origin.name} back: {back}")
+            # A rollback that fails leaves state split across both paths.
+            _migration_error(f"could not put {origin.name} back: {back}")
 
 
 def _free_aside_path(src: Path) -> Path | None:
@@ -488,13 +489,48 @@ def _mark_migrated(new: Path) -> None:
         _migration_warn(f"could not write {marker}: {e}")
 
 
+# Entry-points whose stdout *is* a channel someone reads (client.py's monitor
+# lines become Claude Code notifications) install a reporter here. Short-lived
+# CLIs leave it alone: their stdout is parsed output, and their stderr is
+# surfaced by the Bash call that ran them.
+_migration_reporter = None
+
+
+def set_migration_reporter(fn) -> None:
+    global _migration_reporter
+    _migration_reporter = fn
+
+
 def _migration_warn(msg: str) -> None:
-    # Never raises. Once the aside rename succeeds the migration is past the
-    # point of no return, and an EPIPE/ENOSPC from a warning after that would
-    # otherwise reach the caller's rollback and try to move the token back into
-    # a directory that no longer exists.
+    """Informational: something was set aside, something regenerable didn't
+    move. Never raises — once the aside rename succeeds the migration is past
+    the point of no return, and an EPIPE/ENOSPC from a warning after that would
+    otherwise reach the caller's rollback and try to move the token back into a
+    directory that no longer exists."""
     try:
         print(f"[inter-session] data-dir migration: {msg}", file=sys.stderr)
+    except OSError:
+        pass
+
+
+def _migration_error(msg: str) -> None:
+    """A failure that leaves the install un-migrated or forked.
+
+    These are the ones that say "must be resolved by hand", and stderr is where
+    nobody reads them: `migrate_legacy_data_dir` runs before argument parsing
+    in every entry-point, so the monitor's notification channel was never
+    offered them. By the rule in client.py's `_print_unless_auto`, a fault that
+    prevents the session working stays on the channel the user actually sees.
+    """
+    line = f"[inter-session] data-dir migration: {msg}"
+    if _migration_reporter is not None:
+        try:
+            _migration_reporter(line)
+            return
+        except OSError:
+            pass
+    try:
+        print(line, file=sys.stderr)
     except OSError:
         pass
 
@@ -503,9 +539,22 @@ def _migration_warn(msg: str) -> None:
 _unmigrated_this_run = False
 
 
-def _note_unmigrated(legacy: Path) -> None:
+def _still_on_legacy(legacy: Path, new: Path) -> bool:
+    """Is this run's live state still under the legacy path?
+
+    Not the same question as "is the legacy path a real directory". If we
+    completed the move, the marker is in `new` and our state is there — even if
+    an older build has since recreated `inter-session/` as a real directory of
+    its own, which `_link_legacy` warns about. Answering by directory type sent
+    such a run back to read the *other* build's token and orphan its own.
+    """
+    return (legacy.is_dir() and not legacy.is_symlink()
+            and not (new / MIGRATION_MARKER).is_file())
+
+
+def _note_unmigrated(legacy: Path, new: Path) -> None:
     global _unmigrated_this_run
-    _unmigrated_this_run = legacy.is_dir() and not legacy.is_symlink()
+    _unmigrated_this_run = _still_on_legacy(legacy, new)
 
 
 def data_dir() -> Path:
@@ -529,9 +578,8 @@ def data_dir() -> Path:
         # directory with a fresh token — the fork, caused by the guard against
         # it. A stat is a read, not the filesystem mutation data_dir() is
         # required to stay free of.
-        legacy = legacy_data_dir()
-        if legacy.is_dir() and not legacy.is_symlink():
-            return legacy
+        if _still_on_legacy(legacy_data_dir(), default_data_dir()):
+            return legacy_data_dir()
     return default_data_dir()
 
 
@@ -604,7 +652,11 @@ def client_session_path(ppid: int) -> Path:
 
 
 NAME_MAX_LEN = 40
-_SUFFIX_RE = re.compile(r"-\d+$")
+# Only the range this generator itself produces. Stripping any -<digits>
+# rewrote `release-2024` into `release-2`, so a session in ~/src/release-2024
+# registered under a name that collides with a different repo's — and
+# `send --to release-2` then reaches the wrong session.
+_GENERATED_SUFFIX_RE = re.compile(r"-([2-9]|[1-9]\d)$")
 
 
 def suffixed_name_candidates(name: str, count: int = 3,
@@ -627,10 +679,10 @@ def suffixed_name_candidates(name: str, count: int = 3,
     is handed `foo-2`, which is already registered, and burns a retry per hop.
     """
     taken = set(taken or ())
-    stem = _SUFFIX_RE.sub("", name) or name
+    stem = _GENERATED_SUFFIX_RE.sub("", name) or name
     out: list[str] = []
     i = 2
-    while len(out) < count and i < 200:
+    while len(out) < count and i < 100:
         suffix = f"-{i}"
         base = stem[: NAME_MAX_LEN - len(suffix)].rstrip("-")
         candidate = f"{base}{suffix}"
