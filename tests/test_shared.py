@@ -1661,3 +1661,44 @@ class TestDanglingNewDirIsHandled:
         # claim a plain-rename failure.
         assert (self.legacy / "token").exists() or (self.new / "token").exists()
         assert "Not a directory" not in capsys.readouterr().err
+
+
+class TestSuffixStripIsExactlyWhatWeGenerate:
+    """Any wider strip range eats a legitimate repo name. `release-2024` →
+    `release-2` was the first instance; two digits still turned `sprint-12`
+    into `sprint-2`, which is the name a session in ~/work/sprint would be
+    handed — so `send --to sprint-2` reaches the wrong repo's session."""
+
+    def test_two_digit_project_suffix_is_kept(self):
+        assert shared.suffixed_name_candidates("sprint-12")[0] == "sprint-12-2"
+
+    def test_year_suffix_is_kept(self):
+        assert shared.suffixed_name_candidates("release-2024")[0] == "release-2024-2"
+
+    def test_our_own_single_digit_suffix_is_stripped(self):
+        assert shared.suffixed_name_candidates("web-2")[0] == "web-3"
+
+    def test_falls_back_to_a_random_suffix_past_nine(self):
+        taken = {f"web-{i}" for i in range(2, 10)} | {"web"}
+        out = shared.suffixed_name_candidates("web", taken=taken)
+        assert out, "no candidate offered once -2..-9 are taken"
+        for c in out:
+            assert shared.validate_name(c)
+            assert c not in taken
+            # Not a bare counter, so the next hop won't strip it back off.
+            assert not shared._GENERATED_SUFFIX_RE.search(c)
+
+    def test_random_suffixes_are_distinct(self):
+        taken = {f"web-{i}" for i in range(2, 10)} | {"web"}
+        out = shared.suffixed_name_candidates("web", count=3, taken=taken)
+        assert len(set(out)) == len(out)
+
+    def test_long_name_chain_still_progresses(self):
+        name, tried = "a" * 40, {"a" * 40}
+        for _ in range(12):
+            out = shared.suffixed_name_candidates(name, taken=tried)
+            assert out, f"chain stalled at {name}"
+            nxt = out[0]
+            assert nxt not in tried and shared.validate_name(nxt)
+            tried.add(nxt)
+            name = nxt

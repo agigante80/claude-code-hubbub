@@ -137,7 +137,10 @@ async def _run(args) -> int:
                 print("not connected (stale state left in place)")
                 return 0
         print(f"name={state.get('name', '') or '(unnamed)'}")
-        print(f"session_id={state['session_id']}")
+        # .get, like the pid read above: a hand-edited, foreign or
+        # older-format state file must not crash the command the disconnect
+        # and rename flows are built on.
+        print(f"session_id={state.get('session_id', '')}")
         print(f"listener_pid={listener_pid}")
         print(f"host={state.get('host', '127.0.0.1')}")
         print(f"port={state.get('port', shared.DEFAULT_PORT)}")
