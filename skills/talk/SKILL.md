@@ -437,6 +437,23 @@ first match is the record.
 ## Error notifications
 
 If a monitor line begins with `[inter-session]` (no `msg=`), it's an
-operational notice — likely "dependencies missing" or "another monitor
-is already running". Surface it to the user and offer the appropriate
-fix.
+operational notice. Surface it to the user and offer the appropriate fix.
+
+Which notices reach you depends on how the monitor was started, and the
+split is deliberate:
+
+- **A monitor you started** (the `Monitor()` call in connect) reports
+  everything on stdout, so you see all of the notices below.
+- **A monitor Claude Code auto-started** (the default; it passes
+  `--from-monitor`) sends *routine* outcomes to stderr instead —
+  `auto-named … from cwd`, `another monitor … is already running`,
+  `dependencies missing`. With auto-start on, those would otherwise fire
+  once per session on the machine, in projects whose user has never used
+  hubbub. They land in the monitor's output file, readable with `Read`
+  if you need them.
+
+**Faults that stop the session connecting stay on stdout either way** —
+`server identity check failed`, `hello rejected: …`, `connected to a
+non-inter-session service`, `name … taken after N retries`. Treat those
+as real: the first is the port-squatter check, and `hello rejected:
+unauthorized` is the symptom of a split token namespace.

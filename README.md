@@ -57,8 +57,11 @@ one session at a time. Four things are easy to get wrong:
    monitor still holds that session's lock, so the new one exits with
    `another monitor for this session is already running`. Stop the old
    monitor first (`TaskStop` its task, or `kill` the `listener_pid`
-   recorded in `~/.claude/data/hubbub/clients/<key>.session`),
-   then run `/hubbub:talk`.
+   recorded in `~/.claude/data/inter-session/clients/<key>.session`),
+   then run `/hubbub:talk`. Use the `inter-session` path here: if no
+   new-build entry-point has run yet the `hubbub` directory does not
+   exist, and once one has, the legacy path is a symlink to it — so this
+   spelling is correct in both states.
 2. **`/plugin uninstall` does not remove the plugin's cache directory,
    and a session started before the uninstall keeps the old skill in
    memory.** Such a session can still spawn the old client — and since

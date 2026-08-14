@@ -6,8 +6,14 @@ relative to its own path (no env var needed); CLAUDE_PLUGIN_ROOT is
 honored as an override if set.
 
 Modes:
-  always                          start at every CC session open
-  on-skill-invoke:talk           start when /hubbub:talk is first invoked
+  always (--on)                   start at every CC session open
+  on-skill-invoke:talk (--off)    no auto-start at all
+
+--off also records a durable opt-out under the data directory, which
+`/plugin update` cannot overwrite and which makes a plugin-started
+monitor exit immediately — so it is not a "lazy start", it is off.
+Connecting by hand is unaffected: `/hubbub:talk connect` starts its own
+monitor and does not consult the opt-out.
 
 Changes take effect on `/reload-plugins` or the next CC session.
 """

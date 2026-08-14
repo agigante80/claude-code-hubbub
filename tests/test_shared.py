@@ -13,6 +13,8 @@ import pytest
 
 from bin import shared
 
+SKILL_DIR = Path(__file__).resolve().parent.parent / "skills" / "talk"
+
 
 class TestValidateName:
     def test_simple_ascii(self):
@@ -680,9 +682,10 @@ class TestLegacyDataDirMigration:
         # Skipped the dangling slot rather than trying to rename onto it.
         assert (self.legacy.with_name("inter-session.pre-rename-2") / "venv").is_dir()
 
-    def test_unwritable_parent_rolls_back_rather_than_half_migrating(self, capsys):
+    def test_unwritable_parent_bails_before_touching_anything(self, capsys):
         """`src/token -> dst/token` needs no write on the parent, but renaming
-        `src` aside does. Failing there after the live move is the same fork."""
+        `src` aside does — and so does creating the migration lock. Failing to
+        lock means we never start, which is the safe direction."""
         self.legacy.mkdir(parents=True)
         (self.legacy / "token").write_text("live")
         (self.legacy / "venv").mkdir()
@@ -697,7 +700,24 @@ class TestLegacyDataDirMigration:
         assert not self.legacy.is_symlink()
         assert (self.legacy / "token").read_text() == "live"
         assert not (self.new / "token").exists()
-        assert "could not finish draining" in capsys.readouterr().err
+
+    def test_drain_rolls_back_a_partial_move(self, monkeypatch, capsys):
+        """Unit-level, because the entry point now refuses to start when it
+        cannot lock. A live entry that will not move must leave the disk as it
+        was: `dst` holding some of the state and `src` the rest is the split
+        namespace the whole module exists to prevent."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "clients").mkdir()
+        (self.legacy / "messages.log").write_text("log")
+        (self.legacy / "token").write_text("live")
+        self.new.mkdir(parents=True)
+        self._refuse(monkeypatch, "token")
+        assert shared._drain_into(self.legacy, self.new) is False
+        assert (self.legacy / "token").read_text() == "live"
+        assert (self.legacy / "clients").is_dir()
+        assert (self.legacy / "messages.log").read_text() == "log"
+        assert not (self.new / "clients").exists()
+        assert not (self.new / "messages.log").exists()
 
     def test_aside_falls_back_to_a_free_name(self, capsys):
         self.legacy.mkdir(parents=True)
@@ -1301,3 +1321,69 @@ class TestAwaitPeerCompletion:
         new.mkdir()
         assert shared._await_peer_completion(tmp_path / "inter-session", new,
                                              timeout_s=0.05) is False
+
+
+class TestMigrationIsSerialized:
+    """Concurrent drainers were the one race disk-state re-checks could not
+    cover: they work because a winner never moves state backwards, and
+    `_rollback` does exactly that. A loser rolling back can rename a winner's
+    already-migrated `clients/` and `messages.log` into the legacy dir, which
+    the winner then parks as `inter-session.pre-rename` — every connected
+    session loses its state file and reports "not connected"."""
+
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        self.legacy = tmp_path / ".claude" / "data" / "inter-session"
+        self.new = tmp_path / ".claude" / "data" / "hubbub"
+
+    def test_a_second_process_cannot_hold_it_at_the_same_time(self, tmp_path):
+        """Cross-process, not same-process: a subprocess is the thing the lock
+        actually has to exclude."""
+        self.legacy.mkdir(parents=True)
+        fd = shared._acquire_migration_lock()
+        assert fd is not None
+        try:
+            r = subprocess.run(
+                [sys.executable, "-c",
+                 "import sys; sys.path.insert(0, %r)\n"
+                 "from bin import shared\n"
+                 "print(shared._acquire_migration_lock(timeout_s=0.1) is None)"
+                 % str(SKILL_DIR)],
+                capture_output=True, text=True,
+                env={**os.environ, "HOME": str(tmp_path),
+                     "HUBBUB_NO_REEXEC": "1"},
+                timeout=30)
+            assert r.stdout.strip() == "True", (r.stdout, r.stderr)
+        finally:
+            os.close(fd)
+
+    def test_lock_is_released_for_the_next_caller(self):
+        fd = shared._acquire_migration_lock(timeout_s=0.05)
+        assert fd is not None
+        os.close(fd)
+        again = shared._acquire_migration_lock(timeout_s=0.05)
+        assert again is not None
+        os.close(again)
+
+    def test_migration_still_completes_under_the_lock(self):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert (self.new / "token").read_text() == "live"
+
+    def test_a_held_lock_makes_migration_a_no_op(self):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        fd = shared._acquire_migration_lock()
+        assert fd is not None
+        try:
+            shared.migrate_legacy_data_dir()
+        finally:
+            os.close(fd)
+        # Untouched: the holder is mid-migration and we must not race it.
+        assert not self.legacy.is_symlink()
+        assert (self.legacy / "token").read_text() == "live"
