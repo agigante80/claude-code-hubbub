@@ -1,5 +1,3 @@
-[English](./README.md) · [中文](./README.zh.md)
-
 # inter-session
 
 Agent-to-agent messaging for Claude Code sessions on the same machine. Each
@@ -15,6 +13,36 @@ Does NOT require claude.ai login. No configuration needed.
 Localhost only and Unix-only (macOS, Linux, WSL2) for now.
 
 ![demo](./demo.svg)
+
+## About this fork
+
+This is a **maintained fork** of
+[yilunzhang/claude-code-inter-session](https://github.com/yilunzhang/claude-code-inter-session).
+Upstream last shipped `0.1.3` on 2026-05-24. Everything below was
+developed here on top of that release and offered back upstream as pull
+requests, which are still open — so for now this fork is where the
+fixes live.
+
+| Improvement | What it fixes | Upstream PR |
+| :---------- | :------------ | :---------- |
+| **Server-election race** | Two sessions starting at once could both `bind()` and spawn a server; the loser's cleanup deleted the winner's pidfile, leaving both clients refusing to connect. Now a per-endpoint `flock` serializes the election. | [#15](https://github.com/yilunzhang/claude-code-inter-session/pull/15) |
+| **SEC-001 — sender spoofing** | A peer's Unicode `label` was interpolated into the notification line unescaped, so it could close the header's bracket and forge the `from="…"` attribution. Now rejected at the boundary *and* neutralized at render. | [#8](https://github.com/yilunzhang/claude-code-inter-session/pull/8) |
+| **SEC-002 — forged trailing directive** | Message text could embed `[inter-session …]`-looking text that read as a second, more-trusted message. The reaction policy now states that only the leading header is authoritative. | [#9](https://github.com/yilunzhang/claude-code-inter-session/pull/9) |
+| **Label persistence** | Display labels were lost on every restart. They now persist per project, keyed by repo root. | [#11](https://github.com/yilunzhang/claude-code-inter-session/pull/11) |
+| **In-place relabel** | Changing a label used to mean disconnect + reconnect, losing the `session_id`. `/inter-session relabel` now updates it live. | [#13](https://github.com/yilunzhang/claude-code-inter-session/pull/13) |
+| **Reply-transport binding** | A bus message answered with the harness's `SendMessage` silently reached the wrong session. Replies are now bound to the transport the message arrived on — see [docs/DELIVERY.md](./docs/DELIVERY.md). | fork-only |
+
+The `/plugin marketplace add` line under [Install](#install) points at
+**upstream**, which does not include the above. To install this fork
+instead:
+
+```
+/plugin marketplace add https://github.com/agigante80/claude-code-inter-session
+/plugin install inter-session
+```
+
+Upstream remains the canonical project; if the PRs land, the two
+converge again.
 
 ## How does this compare to subagents and agent teams?
 
@@ -298,6 +326,30 @@ The WebSocket port and idle-shutdown timeout are configurable via
   instructions but applies the same caution as user input —
   destructive ops need explicit affirmative content, and ambiguous
   requests prompt a `question:` clarifier first.
+- Reviewed findings and their fixes are written up in
+  [docs/security/](./docs/security/).
+
+## Delivery semantics
+
+Delivery is a **write to a live WebSocket** — the bus confirms that, not
+that the receiving agent read or acted on the message:
+
+- Unknown or ambiguous targets are rejected with an error frame
+  (`UNKNOWN_PEER` / `AMBIGUOUS` with the candidate list), never routed
+  to a guess. There is no silent misdelivery inside the bus.
+- There is **no offline queue**: a peer that isn't connected can't be
+  sent to, and the send fails immediately.
+- `list` shows how long a peer has been connected, not whether it is
+  paying attention.
+- A `name` belongs to whoever holds it *now*; `session_id` is the stable
+  handle across restarts.
+
+If your machine also runs Claude Code's own peer messaging
+(`ListAgents` / `SendMessage`), note that it is a **separate namespace
+this bus cannot see**, and the same project often has a live session in
+each under near-identical names. Always reply on the transport a message
+arrived on — [docs/DELIVERY.md](./docs/DELIVERY.md) documents both
+real-world failures that motivated the rule.
 
 ## Limits
 
