@@ -1665,6 +1665,33 @@ class TestForeignSymlinkKeepsUsOnTheLiveToken:
         assert shared.data_dir() == self.legacy
         assert shared.token_path().read_text() == "LIVETOKEN"
 
+    def test_dangling_symlink_falls_through_to_the_new_dir(self):
+        """`resolve()` is non-strict, so a link whose target was deleted (or
+        whose external volume is unmounted) resolves happily to a path that
+        cannot be opened or created. Routing state there replaced a session
+        that ran fine on hubbub/ with ensure_token raising FileExistsError
+        straight out of client.py's startup."""
+        self.legacy.parent.mkdir(parents=True)
+        self.legacy.symlink_to(self.tmp / "gone")
+        shared.migrate_legacy_data_dir()
+        assert shared.data_dir() == self.new
+        assert shared.ensure_token(shared.token_path())
+
+    def test_symlink_loop_falls_through_to_the_new_dir(self):
+        self.legacy.parent.mkdir(parents=True)
+        self.legacy.symlink_to(self.legacy)
+        shared.migrate_legacy_data_dir()
+        assert shared.data_dir() == self.new
+        assert shared.ensure_token(shared.token_path())
+
+    def test_symlink_to_a_file_is_not_live_state(self):
+        target = self.tmp / "afile"
+        target.write_text("x")
+        self.legacy.parent.mkdir(parents=True)
+        self.legacy.symlink_to(target)
+        shared.migrate_legacy_data_dir()
+        assert shared.data_dir() == self.new
+
     def test_symlink_to_the_data_dir_is_not_treated_as_foreign(self):
         self.new.mkdir(parents=True)
         self.legacy.symlink_to(self.new)
