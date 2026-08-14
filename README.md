@@ -1,5 +1,13 @@
 # hubbub
 
+> **A maintained fork of
+> [yilunzhang/claude-code-inter-session](https://github.com/yilunzhang/claude-code-inter-session),
+> renamed.** Maintained by [@agigante80](https://github.com/agigante80).
+> It carries six fixes upstream doesn't have yet — two security fixes, a
+> server-election race, and more — all offered back as open pull
+> requests. See [About this fork](#about-this-fork) for the full list and
+> [Install](#install) for the marketplace to add.
+
 Agent-to-agent messaging for Claude Code sessions on the same machine. Each
 Claude Code session connects to a local WebSocket bus and can send messages
 to other connected sessions; incoming messages are delivered to the
@@ -28,6 +36,30 @@ renaming the on-disk state or the line prefix would break sessions that
 are already connected under the old build, and those identifiers are
 invisible to users anyway. They can be migrated later, on their own.
 
+### Upgrading from `inter-session`
+
+Because both plugins share the bus, the port, and the data directory,
+old and new clients interoperate — so you can migrate one session at a
+time. Two things are easy to get wrong:
+
+1. **Installing `hubbub` does not migrate a running session.** The old
+   monitor still holds that session's lock, so the new one exits with
+   `another monitor for this session is already running`. Stop the old
+   monitor first (`TaskStop` its task, or `kill` the `listener_pid`
+   recorded in `~/.claude/data/inter-session/clients/<key>.session`),
+   then run `/hubbub:talk`.
+2. **`/plugin uninstall` does not remove the plugin's cache directory,
+   and a session started before the uninstall keeps the old skill in
+   memory.** Such a session can still spawn the old client — and since
+   whichever client wins the election spawns the server, one old client
+   is enough to put the whole machine back on the old build. Restart
+   those sessions, or remove the stale cache directory, if you need to
+   be certain which version is serving.
+
+To force the server itself to the new build, get to zero connected
+clients (or `kill` the pid in `~/.claude/data/inter-session/server.<port>.pid`)
+and let a new-path client elect a fresh one.
+
 ## About this fork
 
 This is a **maintained fork** of
@@ -46,17 +78,14 @@ fork is where the fixes live.
 | **In-place relabel** | Changing a label used to mean disconnect + reconnect, losing the `session_id`. `/hubbub:talk relabel` now updates it live. | [#13](https://github.com/yilunzhang/claude-code-inter-session/pull/13) |
 | **Reply-transport binding** | A bus message answered with the harness's `SendMessage` silently reached the wrong session. Replies are now bound to the transport the message arrived on — see [docs/DELIVERY.md](./docs/DELIVERY.md). | fork-only |
 
-The `/plugin marketplace add` line under [Install](#install) points at
-**upstream**, which does not include the above. To install this fork
-instead:
+[Install](#install) adds **this** repo's marketplace, so the commands
+there give you the fork. Upstream remains the original project and is
+credited throughout; if the pull requests land, the two converge again —
+minus the rename, which is this fork's own.
 
-```
-/plugin marketplace add https://github.com/agigante80/claude-code-inter-session
-/plugin install hubbub
-```
-
-Upstream remains the canonical project; if the PRs land, the two
-converge again.
+Published by **Andrea Gigante** ([@agigante80](https://github.com/agigante80))
+under the same MIT licence, with upstream's copyright notice retained in
+[LICENSE](./LICENSE) alongside one for the fork's modifications.
 
 ## How does this compare to subagents and agent teams?
 
@@ -109,18 +138,29 @@ natural fit — your existing sessions become the team.
 
 ## Install
 
-In any Claude Code session:
+In any Claude Code session, add this repository as a plugin marketplace
+and install from it:
 
 ```
-/plugin marketplace add https://github.com/yilunzhang/claude-code-inter-session
-/plugin install hubbub
+/plugin marketplace add https://github.com/agigante80/claude-code-hubbub
+/plugin install hubbub@hubbub
 ```
+
+`hubbub@hubbub` is `<plugin>@<marketplace>` — both are named `hubbub`,
+because this repo is a single-plugin marketplace. A marketplace is just a
+git repo, so there is nothing to wait for: `marketplace add` clones this
+one and the plugin is available immediately.
 
 Then start using it:
 
 ```
 /hubbub:talk
 ```
+
+Installing the **original** project instead is
+`/plugin marketplace add https://github.com/yilunzhang/claude-code-inter-session`
+followed by `/plugin install inter-session` — that ships upstream's
+`0.1.3` without the fixes listed under [About this fork](#about-this-fork).
 
 Claude handles runtime dependency install automatically on first use — no
 extra setup needed.
