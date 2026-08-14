@@ -357,6 +357,21 @@ restart. Use `--label ''` to clear the label. Quote `<text>` the same way as
 Call `TaskList()`, find the task whose description is `"hubbub messages"`,
 then `TaskStop(<id>)`.
 
+**If no such task is listed, do not stop there — the session is probably
+still connected.** With auto-start on (the default), the monitor was
+spawned by Claude Code from `monitors.json`, not by this skill's
+`Monitor()` call, so it may not appear in `TaskList()` at all. Fall back
+to the listener pid, the same way the connect step does:
+
+```
+Bash("python3 <bin>/list.py --self")     # prints listener_pid=<pid>
+Bash("kill <pid>")
+```
+
+Then confirm with `list.py --self` that the session is gone. Reporting
+"disconnected" after a `TaskList()` that matched nothing leaves the
+session on the bus and reachable by peers.
+
 ## auto-start — toggle plugin auto-start mode
 
 Edits the plugin's `monitors/monitors.json` `when` field. The script

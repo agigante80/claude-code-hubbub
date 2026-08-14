@@ -642,6 +642,57 @@ class TestLegacyDataDirMigration:
         )
         assert not self.legacy.is_symlink()
 
+    def test_taken_aside_name_does_not_strand_live_state(self, monkeypatch, capsys):
+        """The aside slot can already be occupied by an earlier migration — the
+        user is told it is safe to delete, not required to. Returning False
+        there after live state has moved would leave hubbub/ holding the token
+        and inter-session/ a real directory an older build repopulates."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "venv").mkdir()
+        self.new.mkdir(parents=True)
+        (self.new / "venv").mkdir()          # forces the set-aside path
+        for suffix in ("", *(f"-{n}" for n in range(2, 20))):
+            (self.legacy.with_name(f"inter-session.pre-rename{suffix}")).mkdir()
+        shared.migrate_legacy_data_dir()
+        # Nothing half-done: the token is still where it started.
+        assert (self.legacy / "token").read_text() == "live"
+        assert not (self.new / "token").exists()
+        assert not self.legacy.is_symlink()
+        assert "leaving the migration for a human" in capsys.readouterr().err
+
+    def test_aside_falls_back_to_a_free_name(self, capsys):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "venv").mkdir()
+        self.new.mkdir(parents=True)
+        (self.new / "venv").mkdir()
+        self.legacy.with_name("inter-session.pre-rename").mkdir()
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert (self.new / "token").read_text() == "live"
+        assert (self.legacy.with_name("inter-session.pre-rename-2") / "venv").is_dir()
+
+    def test_peer_winning_mid_drain_is_not_reported_as_a_conflict(self, monkeypatch, capsys):
+        """Losing this race is routine now that every session open and every
+        helper CLI runs the migration."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        self.new.mkdir(parents=True)
+
+        def peer_finishes(*a, **k):
+            for e in list(self.legacy.iterdir()):
+                e.replace(self.new / e.name)
+            (self.new / shared.MIGRATION_MARKER).touch()
+            self.legacy.rmdir()
+            self.legacy.symlink_to(self.new)
+            raise FileExistsError(17, "File exists")
+
+        monkeypatch.setattr(shared.os, "rename", peer_finishes)
+        shared.migrate_legacy_data_dir()
+        assert capsys.readouterr().err == ""
+        assert self.legacy.is_symlink()
+
     def test_migrated_dir_is_locked_down(self):
         """`uv venv` creates hubbub/ with the default umask, and the bearer
         token ends up inside it."""

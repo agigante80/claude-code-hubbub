@@ -221,12 +221,14 @@ def _drain_into(src: Path, dst: Path) -> bool:
             os.rename(e, dest)
             moved.append((dest, e))
         except OSError as err:
+            if _migration_complete(src, dst):
+                # A peer finished the whole migration while we were draining,
+                # so what looked like a conflict is the winner's own work.
+                # `when: "always"` plus every helper CLI running this at
+                # startup makes losing the race routine, not exceptional.
+                return True
             _migration_warn(f"could not move {e.name} out of {src}: {err}")
-            for dest, origin in reversed(moved):
-                try:
-                    os.rename(dest, origin)
-                except OSError as back:
-                    _migration_warn(f"could not put {origin.name} back: {back}")
+            _rollback(moved)
             _migration_warn(f"leaving {src} in place; live state must not be "
                             f"relocated behind a running bus")
             return False
@@ -251,10 +253,17 @@ def _drain_into(src: Path, dst: Path) -> bool:
         # recreated something (e.g. clients/) between the scan and now. Set the
         # remainder aside wholesale so the symlink can still go in — leaving
         # `src` a real directory is the one outcome that forks the namespace.
-        aside = src.with_name(src.name + ".pre-rename")
-        if aside.exists():
-            _migration_warn(f"{src} still holds entries and {aside} is taken; "
-                            f"not replacing {src} with a symlink")
+        aside = _free_aside_path(src)
+        if aside is None:
+            # Every candidate name is taken. The live state above has already
+            # moved, so returning False here would abort the caller *after*
+            # the move — no symlink, no marker, and `src` left a real directory
+            # that an older build repopulates with a fresh token. Put it back
+            # instead and leave the disk as we found it.
+            _migration_warn(f"{src} still holds entries and every "
+                            f"{src.name}.pre-rename* name is taken; "
+                            f"leaving the migration for a human")
+            _rollback(moved)
             return False
         leftovers = {e.name for e in src.iterdir()}
         os.rename(src, aside)
@@ -309,6 +318,28 @@ def _link_legacy(legacy: Path, new: Path) -> None:
                 f"Old and new builds will use separate tokens until one of "
                 f"them is removed by hand."
             )
+
+
+def _rollback(moved: list[tuple[Path, Path]]) -> None:
+    """Undo a partial drain. Leaving live state split across the two paths is
+    worse than not migrating at all: the new path would have no token, so the
+    next client mints one and every connected peer is dropped."""
+    for dest, origin in reversed(moved):
+        try:
+            os.rename(dest, origin)
+        except OSError as back:
+            _migration_warn(f"could not put {origin.name} back: {back}")
+
+
+def _free_aside_path(src: Path) -> Path | None:
+    """First unused `<src>.pre-rename[-N]`. A previous migration may already
+    have parked a directory there, and the user is told it is safe to delete
+    rather than required to — so a taken name must not be a dead end."""
+    for suffix in ("", *(f"-{n}" for n in range(2, 20))):
+        candidate = src.with_name(f"{src.name}.pre-rename{suffix}")
+        if not candidate.exists():
+            return candidate
+    return None
 
 
 def _mark_migrated(new: Path) -> None:

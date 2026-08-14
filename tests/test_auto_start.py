@@ -37,9 +37,14 @@ def _run(args: list[str], plugin_root: Path | None,
     # auto_start now mirrors the setting into the data dir (so a plugin update
     # can't silently undo an opt-out), so every run needs one of its own or it
     # would reach into the developer's real ~/.claude/data.
+    if data_dir is None:
+        # Default under the plugin root, which is the tmp_path fixture, so
+        # pytest cleans it up. A bare mkdtemp() here leaked one directory per
+        # call for the whole run.
+        data_dir = (plugin_root / "data" if plugin_root is not None
+                    else Path(tempfile.mkdtemp()) / "data")
     env = {"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
-           "HUBBUB_DATA_DIR": str(data_dir if data_dir is not None
-                                  else Path(tempfile.mkdtemp()) / "data")}
+           "HUBBUB_DATA_DIR": str(data_dir)}
     if plugin_root is not None:
         env["CLAUDE_PLUGIN_ROOT"] = str(plugin_root)
     return subprocess.run(

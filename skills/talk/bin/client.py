@@ -211,14 +211,21 @@ class Client:
         if self._lock_fd is None:
             info = _read_existing_session_state(self.ppid)
             if info:
-                _print_line(
+                # Housekeeping when CC respawned us (e.g. /reload-plugins) into
+                # a session that already has a monitor: the session is
+                # connected, which is what the user wanted. Only worth a
+                # notification when they asked for the connection themselves.
+                _print_unless_auto(
                     "[inter-session] another monitor for this session is already running "
                     f"— name={info.get('name', '')!r}, "
                     f"listener_pid={info.get('listener_pid', '')}, "
-                    f"session_id={info.get('session_id', '')}; exiting"
+                    f"session_id={info.get('session_id', '')}; exiting",
+                    self.from_monitor,
                 )
             else:
-                _print_line("[inter-session] another monitor for this session is already running — exiting")
+                _print_unless_auto(
+                    "[inter-session] another monitor for this session is already "
+                    "running — exiting", self.from_monitor)
             return 0
 
         # Best-effort: delete state file on graceful exit so helpers don't
