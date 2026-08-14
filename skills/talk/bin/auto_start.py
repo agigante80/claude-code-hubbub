@@ -190,6 +190,10 @@ def cmd_set(target: str) -> int:
         # matched — the state after a `/plugin update` restored the shipped
         # value while leaving the data-dir flag behind.
         print(f"auto-start: {target!r}; saved setting updated")
+        # This is the post-/plugin-update shape, and the monitor CC started
+        # for the current session has already exited on the stale opt-out —
+        # so a reload is needed here just as much as on a `when` change.
+        print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
     elif manifest_ok and optout_ok:
         print(f"auto-start: already {target!r}; no change")
 
