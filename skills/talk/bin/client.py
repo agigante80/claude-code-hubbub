@@ -44,6 +44,13 @@ from typing import Optional
 _MISSING_DEP: ImportError | None = None
 try:
     import websockets
+    # psutil is guarded too, even though it is only imported lazily deeper in.
+    # Without it find_cc_ancestor_pid() returns -1 and resolve_listener_key()
+    # falls back to getppid() — but the monitor and the helper CLIs are
+    # spawned by *different* subshells, so they then compute different keys,
+    # the ppid flock stops deduping and self-discovery breaks. Silently. A
+    # half-installed runtime should say so, not degrade into that.
+    import psutil  # noqa: F401
 except ImportError as _e:
     websockets = None  # type: ignore[assignment]
     _MISSING_DEP = _e

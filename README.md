@@ -51,7 +51,7 @@ would split the bus in half:
 
 Because both plugins share the bus, the port, and — via that symlink —
 the data directory, old and new clients interoperate, so you can migrate
-one session at a time. Three things are easy to get wrong:
+one session at a time. Four things are easy to get wrong:
 
 1. **Installing `hubbub` does not migrate a running session.** The old
    monitor still holds that session's lock, so the new one exits with
@@ -66,7 +66,14 @@ one session at a time. Three things are easy to get wrong:
    is enough to put the whole machine back on the old build. Restart
    those sessions, or remove the stale cache directory, if you need to
    be certain which version is serving.
-3. **Don't tidy up `~/.claude/data/inter-session` while cleaning up the
+3. **If you had run `auto-start off` under `0.1.x`, set it again after
+   upgrading.** That setting used to live only as a `when` value inside
+   the plugin's own directory, which the upgrade replaces — and `0.2.0`
+   ships auto-start **on**, so those sessions come back always-on. Re-run
+   `/hubbub:talk auto-start off` once; from `0.2.0` the choice is also
+   recorded under the data directory, where plugin updates can't reach
+   it, so it sticks from then on.
+4. **Don't tidy up `~/.claude/data/inter-session` while cleaning up the
    rest.** After `0.2.0` it is the compatibility symlink described above,
    not a leftover. Remove it and any still-running old build stops
    sharing the token and the election lock with the new ones, which is

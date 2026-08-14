@@ -151,7 +151,13 @@ def migrate_legacy_data_dir() -> None:
         # failure, and not worth a warning that says one happened.
         return
     except OSError as e:
-        _migration_warn(f"could not migrate {legacy} → {new}: {e}")
+        # A peer finishing between two of our checks surfaces as whatever
+        # syscall we happened to be in — EISDIR from renaming a symlink onto
+        # the live directory, say, not just ENOENT. With `when: "always"`
+        # every session open races every other one, so decide by the state on
+        # disk rather than by which error we caught.
+        if not _legacy_points_at(legacy, new):
+            _migration_warn(f"could not migrate {legacy} → {new}: {e}")
 
 
 # Regenerable artifacts: colliding copies of these can be set aside without
@@ -223,15 +229,32 @@ def _drain_into(src: Path, dst: Path) -> bool:
     return True
 
 
+def _legacy_points_at(legacy: Path, new: Path) -> bool:
+    try:
+        return legacy.is_symlink() and legacy.resolve() == new.resolve()
+    except OSError:
+        return False
+
+
 def _link_legacy(legacy: Path, new: Path) -> None:
-    """Point the legacy path at the live one, tolerating a peer that got there
-    first — `symlink_to` raises FileExistsError, an OSError, which the caller
-    would otherwise report as a migration failure on a machine where the
-    migration in fact succeeded."""
+    """Point the legacy path at the live one.
+
+    `FileExistsError` here does NOT reliably mean "a peer symlinked it first".
+    Between our `os.rename` and this call the legacy path does not exist, and
+    an old 0.1.x build starting in that window recreates it as a *real
+    directory* with a fresh token — so swallowing the exception would report
+    the forked namespace this function exists to prevent as a clean migration.
+    Check what is actually on disk instead of inferring it from the error."""
     try:
         legacy.symlink_to(new)
     except FileExistsError:
-        pass
+        if not _legacy_points_at(legacy, new):
+            _migration_warn(
+                f"{legacy} reappeared as a real directory while migrating to "
+                f"{new}; an older build has recreated it with its own token. "
+                f"Old and new builds will use separate tokens until one of "
+                f"them is removed by hand."
+            )
 
 
 def _mark_migrated(new: Path) -> None:
