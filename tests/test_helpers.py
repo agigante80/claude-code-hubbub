@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import fcntl
+
 import json
 import os
 import socket
@@ -499,3 +501,60 @@ class TestDiscover:
         monkeypatch.setenv("INTER_SESSION_PPID_OVERRIDE", "99999")
         out = discover.find_listener_state()
         assert out is None
+
+
+class TestSelfStalenessNeedsBothSignals:
+    """`--self` decides staleness from the pid in the state file AND the
+    listener flock. The flock alone proves *a* monitor holds this session's
+    lock, not that it wrote this file: a respawned monitor takes the lock in
+    run() and writes state only after `hello`, so through reconnect backoff the
+    lock is held while the file still names the previous, dead pid — the pid
+    the disconnect flow would hand to `kill`."""
+
+    def _state(self, tmp_data_dir, pid):
+        clients = tmp_data_dir / "clients"
+        clients.mkdir(parents=True, exist_ok=True)
+        key = 987654
+        (clients / f"{key}.session").write_text(json.dumps({
+            "name": "ghost", "session_id": "sid-1", "listener_pid": pid,
+            "nonce": "n", "host": "127.0.0.1", "port": 9473,
+        }))
+        (clients / f"{key}.lock").touch()
+        return key, clients / f"{key}.lock", clients / f"{key}.session"
+
+    def _run(self, tmp_data_dir, key):
+        env = dict(os.environ)
+        env.update({"HUBBUB_DATA_DIR": str(tmp_data_dir),
+                    "HUBBUB_NO_REEXEC": "1",
+                    "HUBBUB_PPID_OVERRIDE": str(key)})
+        return subprocess.run(
+            [sys.executable, str(BIN_DIR / "list.py"), "--self"],
+            capture_output=True, text=True, env=env, timeout=30)
+
+    def test_dead_pid_under_a_held_lock_is_not_reported_connected(self, tmp_data_dir):
+        # pid 1 is alive but is not our monitor; use a pid that cannot exist.
+        key, lock, session = self._state(tmp_data_dir, 2 ** 31 - 1)
+        held = open(lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            r = self._run(tmp_data_dir, key)
+        finally:
+            held.close()
+        assert "not connected" in r.stdout, r.stdout
+        # The flock refused the cleanup, so don't claim we tidied up...
+        assert "left in place" in r.stdout
+        # ...and the live session's state file must survive.
+        assert session.exists()
+
+    def test_dead_pid_and_free_lock_is_cleaned_up(self, tmp_data_dir):
+        key, _lock, session = self._state(tmp_data_dir, 2 ** 31 - 1)
+        r = self._run(tmp_data_dir, key)
+        assert "not connected (stale state cleaned up)" in r.stdout, r.stdout
+        assert not session.exists()
+
+    def test_unparseable_pid_does_not_crash(self, tmp_data_dir):
+        key, _lock, _session = self._state(tmp_data_dir, "not-a-pid")
+        r = self._run(tmp_data_dir, key)
+        assert r.returncode == 0, r.stderr
+        assert "Traceback" not in r.stderr
+        assert "not connected" in r.stdout

@@ -643,18 +643,26 @@ class TestPpidLockRetriesPastAProbe:
         held = open(lock, "w")
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-        def release_soon():
-            time.sleep(0.08)
-            held.close()
+        # Release on the *first* failed probe rather than after a fixed sleep:
+        # a wall-clock race against the retry schedule makes this flaky on a
+        # loaded machine, which is exactly when the suite runs.
+        probes = []
+        real_flock = fcntl.flock
 
-        t = threading.Thread(target=release_soon)
-        t.start()
-        try:
-            fd = client_mod._acquire_ppid_lock(999)
-            assert fd is not None, "gave up on a lock that was only being probed"
-            os.close(fd)
-        finally:
-            t.join()
+        def release_on_first_contention(fd, op):
+            try:
+                return real_flock(fd, op)
+            except OSError:
+                probes.append(1)
+                if len(probes) == 1:
+                    held.close()
+                raise
+
+        monkeypatch.setattr(client_mod.fcntl, "flock", release_on_first_contention)
+        fd = client_mod._acquire_ppid_lock(999)
+        assert fd is not None, "gave up on a lock that was only being probed"
+        os.close(fd)
+        assert probes, "the lock was never actually contended"
 
     def test_real_holder_still_reads_as_a_duplicate(self, tmp_path, monkeypatch):
         sys.path.insert(0, str(BIN_DIR.parent))

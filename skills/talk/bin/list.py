@@ -91,7 +91,12 @@ async def _run(args) -> int:
         # file still names the previous, dead pid — which is the pid the
         # disconnect flow would tell an agent to kill. Checking the pid first
         # also keeps the flock probe off the path when it is already answered.
-        pid_alive = shared.safe_pid_alive(int(listener_pid)) if listener_pid else False
+        try:
+            pid_alive = shared.safe_pid_alive(int(listener_pid))
+        except (TypeError, ValueError):
+            # Hand-edited or foreign state file. `--self` is what the
+            # disconnect flow runs, so a traceback here would break it.
+            pid_alive = False
         if not (pid_alive and shared.listener_lock_held(lock_path)):
             # No live listener. TOCTOU-safe cleanup — unlink_if_matches
             # re-checks under the same flock and refuses if one reappeared.
