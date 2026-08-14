@@ -1,6 +1,6 @@
 {
   "name": "hubbub",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Agent-to-agent messaging for Claude Code sessions on the same machine.",
   "monitors": "./monitors/monitors.json",
   "userConfig": {
