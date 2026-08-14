@@ -219,6 +219,11 @@ class Client:
         self._lock_fd: Optional[int] = None
         self._max_collision_retries = max_collision_retries
         self._collision_retries = 0
+        # Every name this session has asked for. Passed as `taken` when we
+        # generate our own candidates, so a fallback cannot re-offer a name we
+        # already know is in use — which is the same "burns a retry per hop"
+        # loop the server-side filter exists to prevent.
+        self._tried_names: set[str] = {name} if name else set()
         self._connect_task: Optional[asyncio.Task] = None
 
     def stop(self) -> None:
@@ -344,7 +349,8 @@ class Client:
                         # give-up — a pre-0.2.0 server is still electable on a
                         # part-migrated fleet, and it suggests exactly the
                         # over-long names we just discarded. Generate our own.
-                        candidates = shared.suffixed_name_candidates(self.name)
+                        candidates = shared.suffixed_name_candidates(
+                            self.name, taken=self._tried_names)
                     if (candidates and
                             self._collision_retries < self._max_collision_retries):
                         # Auto-retry with server's first suggestion. Common case:
@@ -353,6 +359,7 @@ class Client:
                         new_name = candidates[0]
                         old_name = self.name
                         self.name = new_name
+                        self._tried_names.add(new_name)
                         self._collision_retries += 1
                         _print_unless_auto(
                             f"[inter-session] name {old_name!r} taken; "

@@ -181,9 +181,7 @@ def migrate_legacy_data_dir() -> None:
         # Another process holds it, or we cannot lock at all. Either way,
         # racing it is what this lock exists to prevent — but we must also not
         # start writing into the new path behind whoever is migrating.
-        global _unmigrated_this_run
-        if legacy.is_dir() and not legacy.is_symlink():
-            _unmigrated_this_run = True
+        _note_unmigrated(legacy)
         return
     try:
         if _migration_complete(legacy, new):
@@ -212,7 +210,6 @@ def migrate_legacy_data_dir() -> None:
             # present, and the marker it looks for was never written.
             _mark_migrated(new)
             _link_legacy(legacy, new)
-            globals()["_unmigrated_this_run"] = False
             # `uv venv` creates the dir with the default umask, so an
             # install-deps-first machine would otherwise leave the bearer
             # token sitting in a 0755 directory. Cosmetic next to the above,
@@ -251,6 +248,12 @@ def migrate_legacy_data_dir() -> None:
         _migration_warn(f"could not migrate {legacy} → {new}: {e}")
     finally:
         os.close(lock_fd)
+        # From the state on disk, not from which branch we took. Winning the
+        # lock and then failing — the live-collision refusal, or any OSError —
+        # leaves the legacy directory holding the live token just as surely as
+        # never getting the lock does, and those paths used to fall through
+        # with the flag still clear.
+        _note_unmigrated(legacy)
 
 
 # Regenerable artifacts: colliding copies of these can be set aside without
@@ -500,6 +503,11 @@ def _migration_warn(msg: str) -> None:
 _unmigrated_this_run = False
 
 
+def _note_unmigrated(legacy: Path) -> None:
+    global _unmigrated_this_run
+    _unmigrated_this_run = legacy.is_dir() and not legacy.is_symlink()
+
+
 def data_dir() -> Path:
     """Pure path resolution — no filesystem side effects. See
     `migrate_legacy_data_dir` for the `inter-session` → `hubbub` move."""
@@ -512,10 +520,18 @@ def data_dir() -> Path:
         # anyway would have ensure_token() mint a token there and
         # secure_dir(clients_dir()) create `clients/` — and a peer that then
         # gets the lock finds both names on both sides, hits the live-collision
-        # branch, and refuses by hand forever. The legacy path is the safe
-        # answer in both states: a real directory before the migration, a
-        # symlink to the same files after it.
-        return legacy_data_dir()
+        # branch, and refuses by hand forever.
+        #
+        # Re-checked rather than trusted: the flag is set once at startup but
+        # client.py runs for hours, and the migrator has a window between its
+        # `os.rename` and `_link_legacy` where the legacy path does not exist.
+        # Honouring a stale flag there would `mkdir -p` it back as a real
+        # directory with a fresh token — the fork, caused by the guard against
+        # it. A stat is a read, not the filesystem mutation data_dir() is
+        # required to stay free of.
+        legacy = legacy_data_dir()
+        if legacy.is_dir() and not legacy.is_symlink():
+            return legacy
     return default_data_dir()
 
 

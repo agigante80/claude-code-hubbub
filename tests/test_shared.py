@@ -373,15 +373,19 @@ class TestLegacyDataDirMigration:
         finally:
             held.close()
 
-    def test_noop_when_already_migrated(self):
+    def test_live_collision_leaves_both_dirs_and_reads_the_legacy_one(self):
+        """Both sides hold a token, so the migration refuses — and the run then
+        has to keep reading the legacy path. Carrying on with `hubbub/` is what
+        deepens the fork: old builds and this one would be on different tokens
+        with nothing reporting it."""
         self.new.mkdir(parents=True)
         (self.new / "token").write_text("current")
         self.legacy.mkdir(parents=True)
         (self.legacy / "token").write_text("stale")
         shared.migrate_legacy_data_dir()
-        assert shared.data_dir() == self.new
+        assert shared.data_dir() == self.legacy
+        # Both left exactly as found — never clobbered, never deleted.
         assert (self.new / "token").read_text() == "current"
-        # Legacy left exactly as found — never clobbered, never deleted.
         assert not self.legacy.is_symlink()
         assert (self.legacy / "token").read_text() == "stale"
 
@@ -1481,3 +1485,69 @@ class TestUnmigratedRunUsesLegacyPath:
     def test_fresh_machine_is_unaffected(self):
         shared.migrate_legacy_data_dir()
         assert shared.data_dir() == self.new
+
+
+class TestUnmigratedFlagFollowsDiskState:
+    """The flag has to reflect the disk, not which branch was taken. Winning
+    the lock and *then* failing — the live-collision refusal, or any OSError —
+    leaves the legacy directory holding the live token just as surely as never
+    getting the lock does, and those paths used to fall through with the flag
+    still clear."""
+
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(shared, "_unmigrated_this_run", False)
+        self.legacy = tmp_path / ".claude" / "data" / "inter-session"
+        self.new = tmp_path / ".claude" / "data" / "hubbub"
+
+    def test_live_collision_refusal_keeps_us_on_legacy(self):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        self.new.mkdir(parents=True)
+        (self.new / "token").write_text("other")
+        shared.migrate_legacy_data_dir()
+        assert shared.data_dir() == self.legacy
+
+    def test_stale_flag_is_not_honoured_once_legacy_is_gone(self):
+        """The migrator has a window between os.rename and _link_legacy where
+        the legacy path does not exist. A long-lived client that was locked out
+        at startup must not mkdir it back as a real directory there — that
+        would be the fork, created by the guard against it."""
+        self.legacy.mkdir(parents=True)
+        monkey = shared._unmigrated_this_run
+        shared.__dict__["_unmigrated_this_run"] = True
+        try:
+            assert shared.data_dir() == self.legacy
+            # Migrator renames it away mid-run.
+            self.legacy.rename(self.new)
+            assert shared.data_dir() == self.new
+        finally:
+            shared.__dict__["_unmigrated_this_run"] = monkey
+
+    def test_symlinked_legacy_is_not_treated_as_unmigrated(self):
+        self.new.mkdir(parents=True)
+        self.legacy.symlink_to(self.new)
+        shared.__dict__["_unmigrated_this_run"] = True
+        try:
+            assert shared.data_dir() == self.new
+        finally:
+            shared.__dict__["_unmigrated_this_run"] = False
+
+
+class TestClientFallbackProgresses:
+    """The client-side fallback (used against a pre-0.2.0 server, which
+    suggests over-long names we discard) generates its own candidates. Without
+    the names it has already tried it re-offers them and the retry budget runs
+    out — the same loop the server-side filter exists to prevent."""
+
+    def test_walking_the_chain_never_repeats(self):
+        tried = {"a" * 40}
+        name = "a" * 40
+        for _ in range(5):
+            nxt = shared.suffixed_name_candidates(name, taken=tried)[0]
+            assert nxt not in tried, f"re-offered {nxt}"
+            tried.add(nxt)
+            name = nxt

@@ -379,7 +379,9 @@ needless kill.
 still showing `name=…` means the session is on the bus and reachable by
 peers — as does reporting "disconnected" after a `TaskList()` that
 matched nothing. `connecting (a listener holds the lock …)` is **not**
-success: a monitor is starting and has not written its state yet.
+success: a monitor is starting, or is retrying a server that is down.
+Its state file is stale, so there is no live pid to signal — `TaskStop`
+the monitor, or turn auto-start off, rather than killing the printed pid.
 
 **Disconnecting is not durable while auto-start is on** (the default).
 Claude Code owns the monitor it declared in `monitors.json`, so it may
