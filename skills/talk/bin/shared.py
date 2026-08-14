@@ -118,26 +118,24 @@ def migrate_legacy_data_dir() -> None:
         return
     new = default_data_dir()
     legacy = legacy_data_dir()
-    if legacy.is_symlink():
-        return  # already migrated
     try:
+        if legacy.is_symlink():
+            if legacy.resolve() == new.resolve():
+                # Migrated by 0.2.0's first cut, which predates the marker.
+                # Backfill it, or the repair branch below can never fire for
+                # this install if the symlink is later lost.
+                _mark_migrated(new)
+            else:
+                _migration_warn(f"{legacy} is a symlink to {legacy.resolve()}, "
+                                f"not {new}; leaving it alone")
+            return
         if legacy.is_dir():
             new.parent.mkdir(parents=True, exist_ok=True)
             if not new.exists():
                 os.rename(legacy, new)
             elif not _drain_into(legacy, new):
-                # Names collided, so both directories hold live state and
-                # neither can be discarded without guessing. Leave the disk
-                # exactly as found and say so.
-                _migration_warn(
-                    f"cannot merge {legacy} into {new}: both hold entries with "
-                    f"the same names. Old and new builds will use separate "
-                    f"tokens until this is resolved by hand."
-                )
                 return
-            else:
-                legacy.rmdir()
-            (new / MIGRATION_MARKER).touch()
+            _mark_migrated(new)
             legacy.symlink_to(new)
         elif not legacy.exists() and (new / MIGRATION_MARKER).is_file():
             # A previous run moved the directory but died — or lost a race —
@@ -145,26 +143,71 @@ def migrate_legacy_data_dir() -> None:
             # no legacy path, recreates it as a real directory with its own
             # token, and the namespace forks silently.
             legacy.symlink_to(new)
+    except FileNotFoundError:
+        # A concurrent starter finished the move between two of our checks.
+        # Every entry-point calls this at startup and simultaneous starts are
+        # normal here (a monitor and a `list.py`, or two CC sessions opening
+        # at once), so this is the expected shape of losing that race — not a
+        # failure, and not worth a warning that says one happened.
+        return
     except OSError as e:
         _migration_warn(f"could not migrate {legacy} → {new}: {e}")
 
 
-def _drain_into(src: Path, dst: Path) -> bool:
-    """Move every entry of `src` into `dst`, returning False (having moved
-    nothing) if any name already exists there.
+# Regenerable artifacts: colliding copies of these can be set aside without
+# asking, because nothing on the bus depends on which one survives. `venv` is
+# rebuilt by `/hubbub:talk install-deps`; the marker is our own bookkeeping.
+_DISPOSABLE = frozenset({"venv", MIGRATION_MARKER})
 
-    `dst` existing does not mean it holds state: `/hubbub:talk install-deps`
-    creates `<data-dir>/venv`, and on an upgrade where the runtime deps are
-    missing that happens *before* any entry-point has had a chance to migrate
-    — `client.py` exits on the missing dep first. Bailing out on "new exists"
-    would strand the token and pidfile in the legacy directory permanently.
+
+def _drain_into(src: Path, dst: Path) -> bool:
+    """Move `src`'s entries into `dst`. False (having changed nothing) if the
+    two hold live state under the same name.
+
+    `dst` existing does not mean it holds state. `/hubbub:talk install-deps`
+    creates `<data-dir>/venv` at the *new* path and is a documented standalone
+    command, so a user upgrading from a pre-rename install can easily create
+    `hubbub/venv` before any monitor has migrated anything — while the old
+    install's own `inter-session/venv` still sits there. Treating that pair as
+    a conflict would refuse the migration on exactly the machines it exists
+    for, permanently and with no self-repair.
     """
-    entries = list(src.iterdir())
-    if any((dst / e.name).exists() for e in entries):
+    collisions = {e.name for e in src.iterdir() if (dst / e.name).exists()}
+    live = collisions - _DISPOSABLE
+    if live:
+        # Both sides hold real bus state under the same name, so the fork has
+        # already happened. Picking a winner would silently destroy one side's
+        # session; a human has to say which token is the live one.
+        _migration_warn(
+            f"cannot merge {src} into {dst}: both hold {sorted(live)}. Old and "
+            f"new builds will use separate tokens until this is resolved by hand."
+        )
         return False
-    for e in entries:
-        os.rename(e, dst / e.name)
+    for e in src.iterdir():
+        if e.name not in collisions:
+            os.rename(e, dst / e.name)
+    try:
+        src.rmdir()
+    except OSError:
+        # Either a disposable collision is still sitting there, or an old build
+        # recreated something (e.g. clients/) between the scan and now. Set the
+        # remainder aside wholesale so the symlink can still go in — leaving
+        # `src` a real directory is the one outcome that forks the namespace.
+        aside = src.with_name(src.name + ".pre-rename")
+        if aside.exists():
+            _migration_warn(f"{src} still holds entries and {aside} is taken; "
+                            f"not replacing {src} with a symlink")
+            return False
+        os.rename(src, aside)
+        _migration_warn(f"set {aside} aside; it holds only regenerable files "
+                        f"and can be deleted")
     return True
+
+
+def _mark_migrated(new: Path) -> None:
+    marker = new / MIGRATION_MARKER
+    if not marker.exists():
+        marker.touch()
 
 
 def _migration_warn(msg: str) -> None:
