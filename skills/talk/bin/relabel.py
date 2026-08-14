@@ -110,6 +110,10 @@ async def _run(args) -> int:
 
 
 def main() -> int:
+    # Move ~/.claude/data/inter-session → …/hubbub if this install predates
+    # the rename. No-op once done; leaves a symlink so older builds still
+    # running on this machine share one token/lock/pidfile with us.
+    shared.migrate_legacy_data_dir()
     parser = argparse.ArgumentParser()
     # Required so `relabel` always carries an intent; an empty string clears.
     parser.add_argument("--label", required=True, help='new label ("" clears it)')

@@ -753,6 +753,10 @@ class Server:
 
 
 def main() -> int:
+    # Move ~/.claude/data/inter-session → …/hubbub if this install predates
+    # the rename. No-op once done; leaves a symlink so older builds still
+    # running on this machine share one token/lock/pidfile with us.
+    shared.migrate_legacy_data_dir()
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=shared.DEFAULT_PORT)

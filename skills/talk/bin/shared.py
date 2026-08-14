@@ -89,10 +89,7 @@ def default_data_dir() -> Path:
     return Path.home() / ".claude" / "data" / "hubbub"
 
 
-_migration_checked = False
-
-
-def _migrate_legacy_data_dir(new: Path) -> None:
+def migrate_legacy_data_dir() -> None:
     """One-time `inter-session` → `hubbub` move, leaving a symlink behind.
 
     The symlink is the whole point. Older builds hardcode the legacy path, and
@@ -104,11 +101,18 @@ def _migrate_legacy_data_dir(new: Path) -> None:
 
     `os.rename` is atomic within a filesystem and keeps inodes, so flocks held
     by running clients survive it untouched.
+
+    Called explicitly by each entry-point at startup, never from `data_dir()`.
+    A path resolver that mutates the filesystem is a resolver that mutates the
+    developer's real `$HOME` the first time a test forgets the `tmp_data_dir`
+    fixture — which is exactly what happened while this was being written.
     """
-    global _migration_checked
-    if _migration_checked:
+    if env("DATA_DIR"):
+        # An explicit override means the caller is pointing us at its own
+        # directory (tests, debugging). Nothing to migrate, and the legacy
+        # path is none of our business.
         return
-    _migration_checked = True
+    new = default_data_dir()
     legacy = legacy_data_dir()
     try:
         if new.exists() or legacy.is_symlink() or not legacy.is_dir():
@@ -124,12 +128,12 @@ def _migrate_legacy_data_dir(new: Path) -> None:
 
 
 def data_dir() -> Path:
+    """Pure path resolution — no filesystem side effects. See
+    `migrate_legacy_data_dir` for the `inter-session` → `hubbub` move."""
     override = env("DATA_DIR")
     if override:
         return Path(override)
-    new = default_data_dir()
-    _migrate_legacy_data_dir(new)
-    return new
+    return default_data_dir()
 
 
 def server_log_path() -> Path:

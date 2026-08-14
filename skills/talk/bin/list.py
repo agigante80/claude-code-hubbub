@@ -137,6 +137,10 @@ async def _run(args) -> int:
 
 
 def main() -> int:
+    # Move ~/.claude/data/inter-session → …/hubbub if this install predates
+    # the rename. No-op once done; leaves a symlink so older builds still
+    # running on this machine share one token/lock/pidfile with us.
+    shared.migrate_legacy_data_dir()
     parser = argparse.ArgumentParser()
     parser.add_argument("--self", action="store_true",
                         help="print only this session's status")
