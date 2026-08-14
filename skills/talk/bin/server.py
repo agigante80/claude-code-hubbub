@@ -347,7 +347,13 @@ class Server:
             if reject is None and name:
                 for existing in self._registry.values():
                     if existing.role == shared.Role.AGENT and existing.name == name:
-                        candidates = shared.suffixed_name_candidates(name)
+                        # Against the live registry: an unfiltered `foo-2` is
+                        # already taken once a third session joins, and the
+                        # client burns a retry per hop until it gives up.
+                        in_use = {c.name for c in self._registry.values()
+                                  if c.role == shared.Role.AGENT and c.name}
+                        candidates = shared.suffixed_name_candidates(
+                            name, taken=in_use)
                         reject = (
                             shared.ErrorCode.NAME_TAKEN,
                             f"name {name!r} is taken",

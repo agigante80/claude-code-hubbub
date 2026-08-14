@@ -540,10 +540,14 @@ class TestSelfStalenessNeedsBothSignals:
             r = self._run(tmp_data_dir, key)
         finally:
             held.close()
-        assert "not connected" in r.stdout, r.stdout
-        # The flock refused the cleanup, so don't claim we tidied up...
-        assert "left in place" in r.stdout
-        # ...and the live session's state file must survive.
+        # A monitor holds the lock, so one is starting and simply has not
+        # written its state yet. Reporting the plain "not connected" string
+        # here would be a false success: SKILL.md's disconnect flow treats it
+        # as proof the session left the bus.
+        assert "not connected" not in r.stdout, r.stdout
+        assert "holds the lock" in r.stdout
+        assert "name=" not in r.stdout, "must not report it as connected either"
+        # The live session's state file must survive.
         assert session.exists()
 
     def test_dead_pid_and_free_lock_is_cleaned_up(self, tmp_data_dir):
