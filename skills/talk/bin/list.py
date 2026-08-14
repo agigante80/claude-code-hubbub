@@ -77,15 +77,21 @@ async def _run(args) -> int:
 
     if args.self:
         listener_pid = state.get("listener_pid", 0)
-        # Identity check, not just liveness: this pid is what `disconnect`
-        # tells the agent to kill, and a SIGKILLed monitor leaves its state
-        # file behind with a pid that may since have been reused.
-        alive = shared.pid_is_our_client(int(listener_pid)) if listener_pid else False
-        if not alive:
-            # Stale state: listener process is gone. TOCTOU-safe cleanup —
-            # don't delete a fresh state written by a reconnected listener.
-            discover.unlink_if_matches(state_path, state)
-            print("not connected (stale state cleaned up)")
+        # The flock, not the pid, decides. It is keyed to this session and
+        # released by the kernel however the monitor dies, so it cannot confuse
+        # a reused pid — or another session's monitor — for ours. That matters
+        # because the pid printed below is what the disconnect flow tells an
+        # agent to kill.
+        lock_path = state_path.with_name(
+            state_path.name[: -len(".session")] + ".lock")
+        if not shared.listener_lock_held(lock_path):
+            # No live listener. TOCTOU-safe cleanup — unlink_if_matches
+            # re-checks under the same flock and refuses if one reappeared.
+            if discover.unlink_if_matches(state_path, state):
+                print("not connected (stale state cleaned up)")
+            else:
+                # It refused, so don't claim we tidied up.
+                print("not connected (stale state left in place)")
             return 0
         print(f"name={state.get('name', '') or '(unnamed)'}")
         print(f"session_id={state['session_id']}")

@@ -42,8 +42,12 @@ def _run(args: list[str], plugin_root: Path | None,
         # a bare mkdtemp() leaked one directory per call. Unique per call as
         # well: sharing one dir across calls in a test would silently carry the
         # durable autostart-off flag between them.
-        base = plugin_root if plugin_root is not None else Path(tempfile.mkdtemp())
-        data_dir = Path(tempfile.mkdtemp(dir=str(base))) / "data"
+        if plugin_root is None:
+            raise AssertionError(
+                "pass data_dir when plugin_root is None; a bare mkdtemp here "
+                "is never reclaimed"
+            )
+        data_dir = Path(tempfile.mkdtemp(dir=str(plugin_root))) / "data"
     env = {"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
            "HUBBUB_DATA_DIR": str(data_dir)}
     if plugin_root is not None:
@@ -119,11 +123,11 @@ class TestSet:
 
 
 class TestErrors:
-    def test_no_env_falls_back_to_script_relative(self):
+    def test_no_env_falls_back_to_script_relative(self, tmp_path: Path):
         """Without CLAUDE_PLUGIN_ROOT, the script self-locates from
         __file__ (bin/auto_start.py → repo root → monitors/monitors.json).
         It should succeed against the real repo."""
-        r = _run(["--status"], plugin_root=None)
+        r = _run(["--status"], plugin_root=None, data_dir=tmp_path / "data")
         assert r.returncode == 0
         assert "auto-start:" in r.stdout
 

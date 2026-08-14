@@ -2,6 +2,8 @@ import fcntl
 import json
 import os
 import stat
+import time
+import subprocess
 import sys
 import threading
 import types
@@ -1193,3 +1195,51 @@ class TestRotateLogRetention:
         assert "v1" in (tmp_path / "x.log.3").read_text()
         assert "v2" in (tmp_path / "x.log.2").read_text()
         assert "v3" in (tmp_path / "x.log.1").read_text()
+
+
+class TestListenerLockHeld:
+    """The staleness authority for `list.py --self`, which prints a pid the
+    disconnect flow tells an agent to kill. A cmdline substring check could not
+    tell one session's monitor from another's, so a reused pid belonging to a
+    *live peer's* client.py would have been offered as the kill target."""
+
+    def test_false_when_nobody_holds_it(self, tmp_path):
+        assert shared.listener_lock_held(tmp_path / "1.lock") is False
+
+    def test_true_while_a_holder_lives(self, tmp_path):
+        lock = tmp_path / "1.lock"
+        held = open(lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            assert shared.listener_lock_held(lock) is True
+        finally:
+            held.close()
+
+    def test_released_when_the_holder_dies(self, tmp_path):
+        """The kernel drops the lock however the process exits — which is why
+        this beats a pid check for a monitor that was SIGKILLed."""
+        lock = tmp_path / "1.lock"
+        proc = subprocess.Popen([
+            sys.executable, "-c",
+            f"import fcntl,time;f=open({str(lock)!r},'w');"
+            f"fcntl.flock(f,fcntl.LOCK_EX);time.sleep(30)",
+        ])
+        try:
+            deadline = time.time() + 5
+            while time.time() < deadline and not shared.listener_lock_held(lock):
+                time.sleep(0.05)
+            assert shared.listener_lock_held(lock) is True
+            proc.kill()
+            proc.wait(timeout=5)
+            deadline = time.time() + 5
+            while time.time() < deadline and shared.listener_lock_held(lock):
+                time.sleep(0.05)
+            assert shared.listener_lock_held(lock) is False
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+    def test_probing_does_not_keep_the_lock(self, tmp_path):
+        lock = tmp_path / "1.lock"
+        assert shared.listener_lock_held(lock) is False
+        assert shared.listener_lock_held(lock) is False
