@@ -155,3 +155,31 @@ class TestRequirements:
         dev = (REPO / "requirements-dev.txt").read_text()
         assert "-r skills/talk/requirements.txt" in dev
         assert "pytest" in dev
+
+
+class TestDependencyGuard:
+    """`import websockets` sits at module scope in every entry-point, so the
+    missing-deps message has to be produced from a *caught* import error. A
+    bare `import websockets` inside `if __name__ == "__main__"` is dead code —
+    the module-level one already crashed with a traceback — and SKILL.md tells
+    the agent to react to a string that would then never be printed."""
+
+    ENTRY_POINTS = ("client.py", "list.py", "send.py", "relabel.py")
+
+    def test_module_level_import_is_guarded(self):
+        for name in self.ENTRY_POINTS:
+            src = (REPO / "skills" / "talk" / "bin" / name).read_text()
+            assert "\nimport websockets\n" not in src, (
+                f"{name}: unguarded module-level `import websockets` aborts "
+                f"before main() and swallows the install-deps hint"
+            )
+            assert "_MISSING_DEP" in src, name
+
+    def test_no_dead_reimport_in_main_block(self):
+        for name in self.ENTRY_POINTS:
+            src = (REPO / "skills" / "talk" / "bin" / name).read_text()
+            _, _, tail = src.partition('if __name__ == "__main__":')
+            assert "import websockets" not in tail, (
+                f"{name}: re-importing websockets in the __main__ block can "
+                f"never fail — the module-level import already decided it"
+            )

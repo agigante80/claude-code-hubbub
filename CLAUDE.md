@@ -173,6 +173,22 @@ inherits the real `$HOME`. A path resolver that touches the filesystem
 defeats the suite's whole isolation story.
 `test_data_dir_has_no_filesystem_side_effects` guards it.
 
+**`hubbub/` already existing does not mean the migration is done.** The guard
+is `legacy.is_symlink()`, not `new.exists()`. On a deps-missing upgrade
+`client.py` dies at its module-level `import websockets` before `main()` — so
+nothing migrates — and the user's next move is `install-deps`, which creates
+`<data-dir>/venv` and thereby the new directory. A "new exists → bail" check
+would then be permanently stuck, stranding the live token and pidfile under
+`inter-session/` with no symlink: exactly the forked namespace the symlink
+exists to prevent, with no self-repair path. `_drain_into` moves the entries
+across instead, and refuses (loudly, changing nothing) if any name collides —
+a collision means state has already forked and picking a winner would destroy
+one side's bus.
+
+A `.migrated-from-inter-session` marker in the new dir lets a later run
+recreate the symlink if a previous one moved the directory but died before
+`symlink_to`. Without it that state is invisible and permanent.
+
 ### Server election (`bin/spawn.py` + `bin/server.py --fd`)
 
 Whoever wins the election spawns the server via
