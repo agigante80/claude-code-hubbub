@@ -102,19 +102,30 @@ async def _run(args) -> int:
             # re-checks under the same flock and refuses if one reappeared.
             if discover.unlink_if_matches(state_path, state):
                 print("not connected (stale state cleaned up)")
+                return 0
+            # The cleanup refused. Two very different reasons, and reporting
+            # them the same way is how the disconnect flow gets misled.
+            fresh = discover._read_state(state_path)
+            if fresh and fresh.get("session_id") != state.get("session_id"):
+                # A new monitor registered while we were looking: the state we
+                # read was simply out of date and the session is connected.
+                state, listener_pid = fresh, fresh.get("listener_pid", 0)
             elif shared.listener_lock_held(lock_path):
-                # The cleanup refused because a monitor holds the lock: one is
-                # starting and has not written its state yet. Must not read as
-                # "not connected" — SKILL.md's disconnect flow treats that
-                # string as proof the session left the bus, so it would report
-                # a successful disconnect at the moment a monitor is
-                # re-registering the session.
-                print("connecting (a listener holds the lock; "
-                      "no session state written yet)")
+                # A monitor holds the lock but the state file still names the
+                # previous, dead pid — it is starting, or sitting in reconnect
+                # backoff because the server is down. Must not read as "not
+                # connected": SKILL.md's disconnect flow treats that string as
+                # proof the session left the bus, so it would report a
+                # successful disconnect while a monitor re-registers.
+                print("connecting (a listener holds the lock; its state file "
+                      "is stale, so there is no live pid to signal)")
+                print("if this persists, the monitor is retrying a server that "
+                      "is down: TaskStop it, or /hubbub:talk auto-start off")
+                return 0
             else:
-                # It refused for some other reason, so don't claim we tidied up.
+                # Refused for some other reason; don't claim we tidied up.
                 print("not connected (stale state left in place)")
-            return 0
+                return 0
         print(f"name={state.get('name', '') or '(unnamed)'}")
         print(f"session_id={state['session_id']}")
         print(f"listener_pid={listener_pid}")
