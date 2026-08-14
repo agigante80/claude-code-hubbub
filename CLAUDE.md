@@ -344,13 +344,12 @@ prose so prose edits can't accidentally drop a guardrail.
 - **Don't weaken the SKILL.md description** ("pushy" multi-trigger
   framing is intentional to combat undertriggering — skill-creator
   best practice).
-- **Don't update one README without updating the other.** The repo
-  ships both `README.md` (English) and `README.zh.md` (Simplified
-  Chinese), cross-linked at the top of each. They're considered a
-  pair — when you change one, mirror the change in the other in the
-  same commit. If the English content shifts but the Chinese gets
-  stale, readers landing from `README.zh.md` get a misleading
-  description of how the project works.
+- **Don't add translations.** The project is English-only: one
+  `README.md`, no `README.<lang>.md`, no localized docs or skill
+  content. A Simplified Chinese README existed until 2026-08-14 and was
+  deleted — it drifted out of sync with the English one, and a stale
+  translation is worse than none. If a translation shows up in a PR or
+  a patch, drop it rather than maintaining it.
 - **Don't bump the version in only one of the two plugin manifests.**
   `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`
   both carry a `version` field and are consulted by different code
