@@ -38,11 +38,12 @@ def _run(args: list[str], plugin_root: Path | None,
     # can't silently undo an opt-out), so every run needs one of its own or it
     # would reach into the developer's real ~/.claude/data.
     if data_dir is None:
-        # Default under the plugin root, which is the tmp_path fixture, so
-        # pytest cleans it up. A bare mkdtemp() here leaked one directory per
-        # call for the whole run.
-        data_dir = (plugin_root / "data" if plugin_root is not None
-                    else Path(tempfile.mkdtemp()) / "data")
+        # Under the plugin root (the tmp_path fixture) so pytest reclaims it —
+        # a bare mkdtemp() leaked one directory per call. Unique per call as
+        # well: sharing one dir across calls in a test would silently carry the
+        # durable autostart-off flag between them.
+        base = plugin_root if plugin_root is not None else Path(tempfile.mkdtemp())
+        data_dir = Path(tempfile.mkdtemp(dir=str(base))) / "data"
     env = {"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
            "HUBBUB_DATA_DIR": str(data_dir)}
     if plugin_root is not None:

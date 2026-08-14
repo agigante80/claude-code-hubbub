@@ -77,7 +77,10 @@ async def _run(args) -> int:
 
     if args.self:
         listener_pid = state.get("listener_pid", 0)
-        alive = shared.safe_pid_alive(int(listener_pid)) if listener_pid else False
+        # Identity check, not just liveness: this pid is what `disconnect`
+        # tells the agent to kill, and a SIGKILLed monitor leaves its state
+        # file behind with a pid that may since have been reused.
+        alive = shared.pid_is_our_client(int(listener_pid)) if listener_pid else False
         if not alive:
             # Stale state: listener process is gone. TOCTOU-safe cleanup —
             # don't delete a fresh state written by a reconnected listener.
