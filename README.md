@@ -361,6 +361,9 @@ real-world failures that motivated the rule.
   prefix). Above this, the receiver sees a truncated first line plus
   a `cont` pointer line to `~/.claude/data/inter-session/messages.log`,
   where the full payload is always preserved.
+- `messages.log` rotates at 50 MB, keeping 5 backups
+  (`messages.log.1` … `messages.log.5`), so retrieval of an older
+  message has to span the rotated set.
 - Broadcast rate: 60 / minute / session.
 
 ## Development

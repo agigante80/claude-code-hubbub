@@ -34,6 +34,30 @@ class TestReactionPolicy:
         for kw in ("rm -rf", "git push --force", "DROP TABLE", "kubectl delete"):
             assert kw in SKILL
 
+    def test_destructive_gate_is_in_the_dispatch_table(self):
+        """Issue #6: the table is where the model routes, so the
+        destructive-op rule has to live in it, not only in prose below.
+        Anchored on the row's own wording."""
+        assert "| Confirm first" in SKILL or "Confirm first" in SKILL
+        assert "destructive, irreversible, or outward-facing" in SKILL
+
+    def test_destructive_gate_is_not_advisory(self):
+        """Issue #6: confirmation must be the default for the irreversible
+        subset, re-affirmed in a *separate* message, and not defeatable by
+        whatever the first message asserts."""
+        low = SKILL.lower()
+        assert "a gate, not a judgment call" in low
+        assert "in a separate message" in low
+        assert "never enough" in low or "never sufficient" in low
+
+    def test_sender_name_is_documented_as_unauthenticated(self):
+        """Issue #7: `from=` is self-asserted, so a peer can pick an
+        authority-sounding name. The policy must say a name is never
+        evidence of trust."""
+        low = SKILL.lower()
+        assert "self-asserted" in low
+        assert "evidence of authority" in low
+
     def test_loop_suppression_with_done_status_answer(self):
         assert "`done:" in SKILL
         assert "`status:" in SKILL
@@ -113,3 +137,18 @@ class TestNameValidation:
 class TestTruncationHandling:
     def test_messages_log_pointer_documented(self):
         assert "messages.log" in SKILL
+
+    def test_retrieval_is_rotation_aware_and_field_anchored(self):
+        """Issue #8: messages.log rotates (50 MB x 5), so a retrieval that
+        greps only the live file silently finds nothing once a record has
+        rotated out. The documented command must span the rotated set and
+        anchor on the msg_id field rather than the bare id."""
+        assert "messages.log*" in SKILL
+        assert '\\"msg_id\\": ' in SKILL
+        assert "rotates at 50 MB" in SKILL
+
+    def test_documented_rotation_matches_the_code(self):
+        """The doc quotes concrete rotation numbers; keep them true."""
+        shared = (REPO / "skills" / "inter-session" / "bin" / "shared.py").read_text()
+        assert "MESSAGES_LOG_MAX_BYTES = 50 * 1024 * 1024" in shared
+        assert "MESSAGES_LOG_BACKUPS = 5" in shared
