@@ -309,9 +309,22 @@ class TestPaths:
         monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
         monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setattr(shared, "_migration_checked", False)
         path = shared.data_dir()
         assert str(path).endswith(".claude/data/hubbub")
+
+    def test_data_dir_has_no_filesystem_side_effects(self, tmp_path, monkeypatch):
+        """`data_dir()` must stay a pure resolver. It used to run the legacy
+        migration inline, which meant any test that resolved the default path
+        without the `tmp_data_dir` fixture silently moved the developer's real
+        ~/.claude/data/inter-session — it did, once, during 0.2.0."""
+        monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        legacy = tmp_path / ".claude" / "data" / "inter-session"
+        legacy.mkdir(parents=True)
+        shared.data_dir()
+        assert not legacy.is_symlink()
+        assert not (tmp_path / ".claude" / "data" / "hubbub").exists()
 
 
 class TestLegacyDataDirMigration:
@@ -324,13 +337,13 @@ class TestLegacyDataDirMigration:
         monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
         monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setattr(shared, "_migration_checked", False)
         self.legacy = tmp_path / ".claude" / "data" / "inter-session"
         self.new = tmp_path / ".claude" / "data" / "hubbub"
 
     def test_migrates_and_leaves_symlink(self):
         self.legacy.mkdir(parents=True)
         (self.legacy / "token").write_text("secret")
+        shared.migrate_legacy_data_dir()
         assert shared.data_dir() == self.new
         assert (self.new / "token").read_text() == "secret"
         assert self.legacy.is_symlink()
@@ -346,7 +359,7 @@ class TestLegacyDataDirMigration:
         held = open(lock, "w")
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
-            shared.data_dir()
+            shared.migrate_legacy_data_dir()
             contender = open(self.new / "9473.election.lock", "w")
             try:
                 with pytest.raises(BlockingIOError):
@@ -361,6 +374,7 @@ class TestLegacyDataDirMigration:
         (self.new / "token").write_text("current")
         self.legacy.mkdir(parents=True)
         (self.legacy / "token").write_text("stale")
+        shared.migrate_legacy_data_dir()
         assert shared.data_dir() == self.new
         assert (self.new / "token").read_text() == "current"
         # Legacy left exactly as found — never clobbered, never deleted.
@@ -368,16 +382,27 @@ class TestLegacyDataDirMigration:
         assert (self.legacy / "token").read_text() == "stale"
 
     def test_noop_on_fresh_install(self):
+        shared.migrate_legacy_data_dir()
         assert shared.data_dir() == self.new
         assert not self.legacy.exists()
 
     def test_second_call_does_not_re_migrate(self):
         self.legacy.mkdir(parents=True)
-        shared.data_dir()
+        shared.migrate_legacy_data_dir()
         assert self.legacy.is_symlink()
-        # Symlink present: a re-check must not try to rename it onto itself.
-        assert shared.data_dir() == self.new
+        # Symlink present: a re-run must not try to rename it onto itself.
+        shared.migrate_legacy_data_dir()
         assert self.legacy.is_symlink()
+        assert self.legacy.resolve() == self.new
+
+    def test_env_override_suppresses_migration(self, tmp_path, monkeypatch):
+        """An explicit data dir means the caller owns the layout; don't go
+        touching the legacy path behind its back."""
+        monkeypatch.setenv("HUBBUB_DATA_DIR", str(tmp_path / "explicit"))
+        self.legacy.mkdir(parents=True)
+        shared.migrate_legacy_data_dir()
+        assert not self.legacy.is_symlink()
+        assert not self.new.exists()
 
 
 class TestEnvAliases:

@@ -384,6 +384,10 @@ def _env_float(*keys, default: float) -> float:
 
 
 def main() -> int:
+    # Move ~/.claude/data/inter-session → …/hubbub if this install predates
+    # the rename. No-op once done; leaves a symlink so older builds still
+    # running on this machine share one token/lock/pidfile with us.
+    shared.migrate_legacy_data_dir()
     # Resolution order for port / idle-shutdown:
     #   1. CLI arg (explicit override)
     #   2. CLAUDE_PLUGIN_OPTION_<KEY>  (set by CC when installed via /plugin install + userConfig)

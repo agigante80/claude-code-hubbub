@@ -149,7 +149,7 @@ Don't "finish the rename" in one sweep and assume it's cosmetic.
 
 #### The data-dir migration is a rename **plus a symlink**, and the symlink is the load-bearing half
 
-`shared._migrate_legacy_data_dir` does `os.rename(inter-session, hubbub)`
+`shared.migrate_legacy_data_dir()` does `os.rename(inter-session, hubbub)`
 and then recreates `inter-session` as a symlink to `hubbub`. Don't drop
 the symlink as tidy-up. Older builds on the same machine hardcode the
 legacy path, and they must keep resolving to the *same* token, election
@@ -164,6 +164,14 @@ within a filesystem and preserves inodes, so flocks already held by
 running monitors survive the move — a session connected before the
 upgrade keeps contending with one connected after it. Covered by
 `tests/test_shared.py::TestLegacyDataDirMigration`.
+
+**Each entry-point calls it explicitly; `data_dir()` must stay pure.** The
+migration lived inside `data_dir()` for exactly one afternoon, and in that
+time `make test` moved the developer's *real* `~/.claude/data/inter-session`
+— any test that resolves the default path without the `tmp_data_dir` fixture
+inherits the real `$HOME`. A path resolver that touches the filesystem
+defeats the suite's whole isolation story.
+`test_data_dir_has_no_filesystem_side_effects` guards it.
 
 ### Server election (`bin/spawn.py` + `bin/server.py --fd`)
 
