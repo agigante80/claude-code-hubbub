@@ -1635,3 +1635,29 @@ class TestMigrationErrorsReachTheReporter:
         monkeypatch.setattr(shared, "_migration_reporter", None)
         shared._migration_error("boom")
         assert "boom" in capsys.readouterr().err
+
+
+class TestDanglingNewDirIsHandled:
+    """`if not new.exists()` was the third instance of the exists()/lexists()
+    trap in this file. A dangling symlink at hubbub/ reports exists() == False,
+    so the code took the plain-rename branch, failed with ENOTDIR, and reported
+    a hand-repair failure on a machine _drain_into could have coped with."""
+
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(shared, "_unmigrated_this_run", False)
+        self.legacy = tmp_path / ".claude" / "data" / "inter-session"
+        self.new = tmp_path / ".claude" / "data" / "hubbub"
+
+    def test_does_not_rename_onto_a_dangling_symlink(self, capsys):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        self.new.symlink_to(self.new.with_name("gone"))
+        shared.migrate_legacy_data_dir()
+        # Whatever we do, the live token must not be lost and we must not
+        # claim a plain-rename failure.
+        assert (self.legacy / "token").exists() or (self.new / "token").exists()
+        assert "Not a directory" not in capsys.readouterr().err

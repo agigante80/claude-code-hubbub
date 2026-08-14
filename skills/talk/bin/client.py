@@ -496,8 +496,13 @@ def _env_float(*keys, default: float) -> float:
 def main() -> int:
     # Our stdout is the notification channel, so hard migration failures —
     # the ones that say "resolve by hand" — should reach it rather than dying
-    # in the monitor's output file. Informational ones stay on stderr.
-    shared.set_migration_reporter(_print_line)
+    # in the monitor's output file. Buffered rather than printed directly:
+    # they are replayed only after the auto-start opt-out check below, or a
+    # session the user explicitly turned off would still be notified at every
+    # open for as long as the machine sits in a stuck migration state (the
+    # live-collision refusal is sticky by design). stderr has them either way.
+    migration_errors: list[str] = []
+    shared.set_migration_reporter(migration_errors.append)
     # Move ~/.claude/data/inter-session → …/hubbub if this install predates
     # the rename. No-op once done; leaves a symlink so older builds still
     # running on this machine share one token/lock/pidfile with us.
@@ -529,11 +534,18 @@ def main() -> int:
     parser.add_argument("--from-monitor", action="store_true",
                         help=argparse.SUPPRESS)
     args = parser.parse_args()
+
     if args.from_monitor and shared.autostart_optout_path().exists():
         # `/hubbub:talk auto-start off`. The shipped monitors.json says
         # "always" and a plugin update restores it, so the opt-out has to be
         # enforced here rather than trusted to survive in the plugin dir.
+        # Checked before the migration errors are replayed: "off" has to mean
+        # silent, and a stuck migration would otherwise notify this session at
+        # every open. They are on stderr regardless.
         return 0
+
+    for _line in migration_errors:
+        _print_line(_line)
 
     if _MISSING_DEP is not None:
         if args.from_monitor:
