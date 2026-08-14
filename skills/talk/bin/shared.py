@@ -179,7 +179,11 @@ def migrate_legacy_data_dir() -> None:
     lock_fd = _acquire_migration_lock()
     if lock_fd is None:
         # Another process holds it, or we cannot lock at all. Either way,
-        # racing it is what this lock exists to prevent.
+        # racing it is what this lock exists to prevent — but we must also not
+        # start writing into the new path behind whoever is migrating.
+        global _unmigrated_this_run
+        if legacy.is_dir() and not legacy.is_symlink():
+            _unmigrated_this_run = True
         return
     try:
         if _migration_complete(legacy, new):
@@ -208,6 +212,7 @@ def migrate_legacy_data_dir() -> None:
             # present, and the marker it looks for was never written.
             _mark_migrated(new)
             _link_legacy(legacy, new)
+            globals()["_unmigrated_this_run"] = False
             # `uv venv` creates the dir with the default umask, so an
             # install-deps-first machine would otherwise leave the bearer
             # token sitting in a 0755 directory. Cosmetic next to the above,
@@ -491,12 +496,26 @@ def _migration_warn(msg: str) -> None:
         pass
 
 
+# Set when a run could not perform or confirm the migration. See data_dir().
+_unmigrated_this_run = False
+
+
 def data_dir() -> Path:
     """Pure path resolution — no filesystem side effects. See
     `migrate_legacy_data_dir` for the `inter-session` → `hubbub` move."""
     override = env("DATA_DIR")
     if override:
         return Path(override)
+    if _unmigrated_this_run:
+        # We could not migrate and could not confirm someone else had, while a
+        # real legacy directory still holds the live state. Using `hubbub/`
+        # anyway would have ensure_token() mint a token there and
+        # secure_dir(clients_dir()) create `clients/` — and a peer that then
+        # gets the lock finds both names on both sides, hits the live-collision
+        # branch, and refuses by hand forever. The legacy path is the safe
+        # answer in both states: a real directory before the migration, a
+        # symlink to the same files after it.
+        return legacy_data_dir()
     return default_data_dir()
 
 
@@ -569,24 +588,40 @@ def client_session_path(ppid: int) -> Path:
 
 
 NAME_MAX_LEN = 40
+_SUFFIX_RE = re.compile(r"-\d+$")
 
 
-def suffixed_name_candidates(name: str, count: int = 3) -> list[str]:
-    """`<name>-2 … -N`, trimmed so each one still satisfies NAME_RE.
+def suffixed_name_candidates(name: str, count: int = 3,
+                             taken: "set[str] | None" = None) -> list[str]:
+    """`<stem>-2 … `, trimmed to satisfy NAME_RE, skipping names already in use.
 
-    A bare f"{name}-{i}" overflows the 40-char cap for any name of 39-40
-    chars — and `auto_name_from_cwd` truncates to exactly 40, so with
-    auto-start on, two sessions in a repo whose basename is long enough
-    collide, get an over-length suggestion, and the second is rejected as
-    `invalid_name` and drops off the bus for good. Trim the base instead.
+    Two failure modes this has to avoid, both of which drop a session off the
+    bus for good:
+
+    - **Over-long.** A bare f"{name}-{i}" overflows the 40-char cap for any
+      name of 39-40 chars, and `auto_name_from_cwd` truncates to exactly 40.
+      The client adopts the suggestion, the server rejects it as
+      `invalid_name`, and the monitor stops. Hence the trim.
+    - **Non-progressing.** Trimming alone made `A38-2` suggest `A38-2` — the
+      caller's own name — so the client re-sent the same name until its retry
+      budget ran out. Hence stripping any existing `-N` to a stable stem, and
+      never returning `name` itself or anything in `taken`.
+
+    `taken` should be the live registry: without it the third session in a repo
+    is handed `foo-2`, which is already registered, and burns a retry per hop.
     """
-    out = []
-    for i in range(2, 2 + count):
+    taken = set(taken or ())
+    stem = _SUFFIX_RE.sub("", name) or name
+    out: list[str] = []
+    i = 2
+    while len(out) < count and i < 200:
         suffix = f"-{i}"
-        base = name[: NAME_MAX_LEN - len(suffix)].rstrip("-")
+        base = stem[: NAME_MAX_LEN - len(suffix)].rstrip("-")
         candidate = f"{base}{suffix}"
-        if base and validate_name(candidate):
+        if (base and candidate != name and candidate not in taken
+                and candidate not in out and validate_name(candidate)):
             out.append(candidate)
+        i += 1
     return out
 
 

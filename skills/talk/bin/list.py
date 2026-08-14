@@ -102,8 +102,17 @@ async def _run(args) -> int:
             # re-checks under the same flock and refuses if one reappeared.
             if discover.unlink_if_matches(state_path, state):
                 print("not connected (stale state cleaned up)")
+            elif shared.listener_lock_held(lock_path):
+                # The cleanup refused because a monitor holds the lock: one is
+                # starting and has not written its state yet. Must not read as
+                # "not connected" — SKILL.md's disconnect flow treats that
+                # string as proof the session left the bus, so it would report
+                # a successful disconnect at the moment a monitor is
+                # re-registering the session.
+                print("connecting (a listener holds the lock; "
+                      "no session state written yet)")
             else:
-                # It refused, so don't claim we tidied up.
+                # It refused for some other reason, so don't claim we tidied up.
                 print("not connected (stale state left in place)")
             return 0
         print(f"name={state.get('name', '') or '(unnamed)'}")

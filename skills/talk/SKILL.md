@@ -378,7 +378,14 @@ needless kill.
 **Success is the second command printing `not connected`.** Anything
 still showing `name=…` means the session is on the bus and reachable by
 peers — as does reporting "disconnected" after a `TaskList()` that
-matched nothing.
+matched nothing. `connecting (a listener holds the lock …)` is **not**
+success: a monitor is starting and has not written its state yet.
+
+**Disconnecting is not durable while auto-start is on** (the default).
+Claude Code owns the monitor it declared in `monitors.json`, so it may
+start another one — certainly at the next session open, possibly sooner.
+Say so when reporting, and offer `/hubbub:talk auto-start off` (then
+`/reload-plugins`) if the user wants the session to stay off the bus.
 
 ## auto-start — toggle plugin auto-start mode
 

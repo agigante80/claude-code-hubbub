@@ -1413,3 +1413,71 @@ class TestSuffixedNameCandidates:
     def test_no_trailing_hyphen_before_the_suffix(self):
         # NAME_RE allows a trailing hyphen, but "web--2" reads as a typo.
         assert "--" not in shared.suffixed_name_candidates("w" * 39 + "-")[0]
+
+
+class TestCandidateProgress:
+    """Round 15 fixed over-long candidates by trimming, and thereby created a
+    non-progressing loop: `A38-2` suggested `A38-2`. The client re-sent its own
+    name until the retry budget ran out and the session never joined — the same
+    outcome, by a different route."""
+
+    def test_never_suggests_the_name_it_was_given(self):
+        for name in ("a" * 40, "a" * 38 + "-2", "web-2", "web"):
+            assert name not in shared.suffixed_name_candidates(name), name
+
+    def test_each_hop_makes_progress(self):
+        """Walk the chain the way colliding sessions actually do."""
+        name = "a" * 40
+        seen = {name}
+        for _ in range(6):
+            nxt = shared.suffixed_name_candidates(name, taken=seen)[0]
+            assert nxt not in seen, f"looped back to {nxt}"
+            seen.add(nxt)
+            name = nxt
+
+    def test_skips_names_already_registered(self):
+        taken = {"web-2", "web-3"}
+        assert shared.suffixed_name_candidates("web", taken=taken)[0] == "web-4"
+
+    def test_existing_suffix_is_not_stacked(self):
+        assert "--" not in shared.suffixed_name_candidates("web-2")[0]
+        assert shared.suffixed_name_candidates("web-2")[0] == "web-3"
+
+
+class TestUnmigratedRunUsesLegacyPath:
+    """A run that cannot take the migration lock must not start writing into
+    the new path behind whoever is migrating: ensure_token() would mint a token
+    there and secure_dir(clients_dir()) create `clients/`, and the peer that
+    does hold the lock then finds both names on both sides, hits the
+    live-collision branch, and refuses by hand forever."""
+
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(shared, "_unmigrated_this_run", False)
+        self.legacy = tmp_path / ".claude" / "data" / "inter-session"
+        self.new = tmp_path / ".claude" / "data" / "hubbub"
+
+    def test_locked_out_run_reads_the_legacy_dir(self):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        fd = shared._acquire_migration_lock()
+        assert fd is not None
+        try:
+            shared.migrate_legacy_data_dir()
+        finally:
+            os.close(fd)
+        assert shared.data_dir() == self.legacy
+        assert shared.token_path().read_text() == "live"
+
+    def test_successful_migration_uses_the_new_dir(self):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        shared.migrate_legacy_data_dir()
+        assert shared.data_dir() == self.new
+
+    def test_fresh_machine_is_unaffected(self):
+        shared.migrate_legacy_data_dir()
+        assert shared.data_dir() == self.new
