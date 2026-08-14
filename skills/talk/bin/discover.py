@@ -51,13 +51,33 @@ def find_listener_state_with_path(
     return None, None
 
 
+# Every field a control connection needs to authenticate. A file missing any
+# of them cannot be used, so it is not "state we have" — it is state we don't.
+_REQUIRED_STATE_KEYS = ("session_id", "nonce", "token", "listener_pid")
+
+
 def _read_state(path: Path) -> Optional[dict]:
+    """Parse a listener state file, or None if it is unusable.
+
+    Validated here rather than at each read site. Callers index `token`,
+    `session_id` and `nonce` directly in five places across list/send/relabel,
+    and hardening one of them with `.get` made the paths *disagree*: `--self`
+    printed a Connected-shaped block with an empty session_id while plain
+    `list.py` still died with a KeyError on the same file. A hand-edited,
+    foreign or older-format file now uniformly reads as "not connected", which
+    every caller already handles.
+    """
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        state = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+    if not isinstance(state, dict):
+        return None
+    if any(k not in state for k in _REQUIRED_STATE_KEYS):
+        return None
+    return state
 
 
 def _walk_via_proc(pid: int) -> Optional[dict]:

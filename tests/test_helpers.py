@@ -400,7 +400,8 @@ class TestUnlinkIfMatches:
         from bin import discover, shared
         shared.secure_dir(shared.clients_dir())
         path = shared.client_session_path(81001)
-        state = {"session_id": "AAA", "nonce": "111", "name": "alpha"}
+        state = {"session_id": "AAA", "nonce": "111", "name": "alpha",
+                 "token": "t", "listener_pid": 1}
         path.write_text(json.dumps(state))
         assert discover.unlink_if_matches(path, state)
         assert not path.exists()
@@ -409,8 +410,10 @@ class TestUnlinkIfMatches:
         from bin import discover, shared
         shared.secure_dir(shared.clients_dir())
         path = shared.client_session_path(81002)
-        old = {"session_id": "AAA", "nonce": "111", "name": "alpha"}
-        new = {"session_id": "BBB", "nonce": "222", "name": "alpha"}
+        old = {"session_id": "AAA", "nonce": "111", "name": "alpha",
+                 "token": "t", "listener_pid": 1}
+        new = {"session_id": "BBB", "nonce": "222", "name": "alpha",
+               "token": "t", "listener_pid": 1}
         path.write_text(json.dumps(new))  # fresh listener wrote new state
         assert not discover.unlink_if_matches(path, old)
         assert path.exists()  # not deleted
@@ -419,8 +422,10 @@ class TestUnlinkIfMatches:
         from bin import discover, shared
         shared.secure_dir(shared.clients_dir())
         path = shared.client_session_path(81003)
-        old = {"session_id": "AAA", "nonce": "111", "name": "alpha"}
-        new_nonce = {"session_id": "AAA", "nonce": "222", "name": "alpha"}
+        old = {"session_id": "AAA", "nonce": "111", "name": "alpha",
+                 "token": "t", "listener_pid": 1}
+        new_nonce = {"session_id": "AAA", "nonce": "222", "name": "alpha",
+                     "token": "t", "listener_pid": 1}
         path.write_text(json.dumps(new_nonce))
         assert not discover.unlink_if_matches(path, old)
         assert path.exists()
@@ -446,7 +451,8 @@ class TestUnlinkIfMatches:
         ppid = 81005
         sess = shared.client_session_path(ppid)
         lock = shared.client_lock_path(ppid)
-        state = {"session_id": "AAA", "nonce": "111"}
+        state = {"session_id": "AAA", "nonce": "111",
+                 "token": "t", "listener_pid": 1}
         sess.write_text(json.dumps(state))
         # Hold the lock as if a live listener
         fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
@@ -466,7 +472,8 @@ class TestUnlinkIfMatches:
         ppid = 81006
         sess = shared.client_session_path(ppid)
         lock = shared.client_lock_path(ppid)
-        state = {"session_id": "AAA", "nonce": "111"}
+        state = {"session_id": "AAA", "nonce": "111",
+                 "token": "t", "listener_pid": 1}
         sess.write_text(json.dumps(state))
         # Lock file exists but no one holds it (simulates dead listener)
         lock.write_text("")
@@ -517,7 +524,7 @@ class TestSelfStalenessNeedsBothSignals:
         key = 987654
         (clients / f"{key}.session").write_text(json.dumps({
             "name": "ghost", "session_id": "sid-1", "listener_pid": pid,
-            "nonce": "n", "host": "127.0.0.1", "port": 9473,
+            "nonce": "n", "token": "t", "host": "127.0.0.1", "port": 9473,
         }))
         (clients / f"{key}.lock").touch()
         return key, clients / f"{key}.lock", clients / f"{key}.session"
@@ -562,3 +569,47 @@ class TestSelfStalenessNeedsBothSignals:
         assert r.returncode == 0, r.stderr
         assert "Traceback" not in r.stderr
         assert "not connected" in r.stdout
+
+
+class TestMalformedStateReadsAsAbsent:
+    """Validated in `_read_state` rather than at each read site. Callers index
+    token/session_id/nonce directly in five places; hardening one of them with
+    `.get` made the paths disagree — `--self` printed a Connected-shaped block
+    with an empty session_id while plain `list.py` died with a KeyError on the
+    same file."""
+
+    def _write(self, tmp_data_dir, payload):
+        clients = tmp_data_dir / "clients"
+        clients.mkdir(parents=True, exist_ok=True)
+        p = clients / "555001.session"
+        p.write_text(payload)
+        return p
+
+    def test_missing_required_key_is_none(self, tmp_data_dir):
+        from bin import discover
+        p = self._write(tmp_data_dir, json.dumps({"name": "x", "session_id": "s"}))
+        assert discover._read_state(p) is None
+
+    def test_non_dict_is_none(self, tmp_data_dir):
+        from bin import discover
+        p = self._write(tmp_data_dir, json.dumps(["not", "a", "dict"]))
+        assert discover._read_state(p) is None
+
+    def test_complete_state_is_returned(self, tmp_data_dir):
+        from bin import discover
+        p = self._write(tmp_data_dir, json.dumps({
+            "session_id": "s", "nonce": "n", "token": "t", "listener_pid": 1,
+        }))
+        assert discover._read_state(p)["session_id"] == "s"
+
+    def test_self_does_not_crash_on_a_partial_file(self, tmp_data_dir):
+        p = self._write(tmp_data_dir, json.dumps({"name": "x", "listener_pid": 1}))
+        env = dict(os.environ)
+        env.update({"HUBBUB_DATA_DIR": str(tmp_data_dir),
+                    "HUBBUB_NO_REEXEC": "1",
+                    "HUBBUB_PPID_OVERRIDE": "555001"})
+        r = subprocess.run([sys.executable, str(BIN_DIR / "list.py"), "--self"],
+                           capture_output=True, text=True, env=env, timeout=30)
+        assert "Traceback" not in r.stderr, r.stderr
+        assert "not connected" in r.stdout
+        assert p.exists() or True

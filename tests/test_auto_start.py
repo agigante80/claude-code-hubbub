@@ -372,3 +372,24 @@ class TestOnDoesNotDestroyTheOptOutOnFailure:
         r = _run(["--on"], fake_plugin_root, data_dir=data)
         assert r.returncode == 0, r.stderr
         assert not (data / "autostart-off").exists()
+
+
+class TestFailureMessageNamesOnlyRealFailures:
+    def test_untouched_optout_is_not_reported_as_failed(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """`--on` with an existing opt-out and an unwritable manifest never
+        attempts the opt-out write — so saying it could not be written, and
+        pointing at a stderr line that was never printed, is wrong."""
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "autostart-off").touch()
+        monitors = fake_plugin_root / "monitors"
+        monitors.chmod(0o500)
+        try:
+            r = _run(["--on"], fake_plugin_root, data_dir=data)
+        finally:
+            monitors.chmod(0o700)
+        assert "the plugin manifest" in r.stdout, r.stdout
+        assert "the saved setting" not in r.stdout
+        assert "NOT applied" in r.stdout
+        assert (data / "autostart-off").exists()

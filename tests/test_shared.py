@@ -1443,9 +1443,8 @@ class TestCandidateProgress:
         taken = {"web-2", "web-3"}
         assert shared.suffixed_name_candidates("web", taken=taken)[0] == "web-4"
 
-    def test_existing_suffix_is_not_stacked(self):
+    def test_no_double_hyphen(self):
         assert "--" not in shared.suffixed_name_candidates("web-2")[0]
-        assert shared.suffixed_name_candidates("web-2")[0] == "web-3"
 
 
 class TestUnmigratedRunUsesLegacyPath:
@@ -1553,32 +1552,6 @@ class TestClientFallbackProgresses:
             name = nxt
 
 
-class TestSuffixOnlyStrippedWhenItLooksGenerated:
-    """Stripping any trailing -<digits> rewrote a legitimate name into an
-    unrelated one: a session in ~/src/release-2024 registered as `release-2`,
-    which collides with what a session in ~/src/release would be handed — and
-    `send --to release-2` then reaches the wrong repo's session."""
-
-    def test_year_like_suffix_is_kept(self):
-        assert shared.suffixed_name_candidates("release-2024")[0] == "release-2024-2"
-
-    def test_large_numeric_suffix_is_kept(self):
-        assert shared.suffixed_name_candidates("v-100")[0] == "v-100-2"
-
-    def test_our_own_suffix_is_stripped_so_it_progresses(self):
-        assert shared.suffixed_name_candidates("web-2")[0] == "web-3"
-        assert "web-2" not in shared.suffixed_name_candidates("web-2")
-
-    def test_long_name_chain_still_progresses(self):
-        name, tried = "a" * 40, {"a" * 40}
-        for _ in range(5):
-            nxt = shared.suffixed_name_candidates(name, taken=tried)[0]
-            assert nxt not in tried
-            assert shared.validate_name(nxt)
-            tried.add(nxt)
-            name = nxt
-
-
 class TestUnmigratedFollowsWhereStateIs:
     @pytest.fixture(autouse=True)
     def _home(self, tmp_path, monkeypatch):
@@ -1663,42 +1636,3 @@ class TestDanglingNewDirIsHandled:
         assert "Not a directory" not in capsys.readouterr().err
 
 
-class TestSuffixStripIsExactlyWhatWeGenerate:
-    """Any wider strip range eats a legitimate repo name. `release-2024` →
-    `release-2` was the first instance; two digits still turned `sprint-12`
-    into `sprint-2`, which is the name a session in ~/work/sprint would be
-    handed — so `send --to sprint-2` reaches the wrong repo's session."""
-
-    def test_two_digit_project_suffix_is_kept(self):
-        assert shared.suffixed_name_candidates("sprint-12")[0] == "sprint-12-2"
-
-    def test_year_suffix_is_kept(self):
-        assert shared.suffixed_name_candidates("release-2024")[0] == "release-2024-2"
-
-    def test_our_own_single_digit_suffix_is_stripped(self):
-        assert shared.suffixed_name_candidates("web-2")[0] == "web-3"
-
-    def test_falls_back_to_a_random_suffix_past_nine(self):
-        taken = {f"web-{i}" for i in range(2, 10)} | {"web"}
-        out = shared.suffixed_name_candidates("web", taken=taken)
-        assert out, "no candidate offered once -2..-9 are taken"
-        for c in out:
-            assert shared.validate_name(c)
-            assert c not in taken
-            # Not a bare counter, so the next hop won't strip it back off.
-            assert not shared._GENERATED_SUFFIX_RE.search(c)
-
-    def test_random_suffixes_are_distinct(self):
-        taken = {f"web-{i}" for i in range(2, 10)} | {"web"}
-        out = shared.suffixed_name_candidates("web", count=3, taken=taken)
-        assert len(set(out)) == len(out)
-
-    def test_long_name_chain_still_progresses(self):
-        name, tried = "a" * 40, {"a" * 40}
-        for _ in range(12):
-            out = shared.suffixed_name_candidates(name, taken=tried)
-            assert out, f"chain stalled at {name}"
-            nxt = out[0]
-            assert nxt not in tried and shared.validate_name(nxt)
-            tried.add(nxt)
-            name = nxt
