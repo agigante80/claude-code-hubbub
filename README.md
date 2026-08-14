@@ -406,6 +406,11 @@ The WebSocket port and idle-shutdown timeout are configurable via
   connect. This is acceptable for single-user, single-machine.
 - The token does **not** protect against malicious code running as your
   user. If you don't trust local code, don't enable hubbub.
+- **Auto-start is on by default, so every Claude Code session joins the
+  bus at open** — including sessions in repos where you never invoke the
+  skill. Anything holding the token can therefore reach all of them, not
+  just the ones you opted in. `/hubbub:talk auto-start off` reverts to
+  opt-in per machine.
 - The receiving agent's reaction policy (see
   [SKILL.md](./skills/talk/SKILL.md)) treats peer messages as
   instructions but applies the same caution as user input —

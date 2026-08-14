@@ -196,6 +196,13 @@ def cmd_set(target: str) -> int:
         print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
     elif manifest_ok and optout_ok:
         print(f"auto-start: already {target!r}; no change")
+    else:
+        # One half failed while the other already matched, so nothing moved —
+        # but SKILL.md tells the agent to surface this command's output, and an
+        # empty stdout with exit 0 reads as success.
+        print(f"auto-start: {target!r} in effect via "
+              f"{'the plugin manifest' if manifest_ok else 'the saved setting'}; "
+              f"the other half could not be written (see stderr)")
 
     if not effective:
         print(f"auto-start: could not apply {target!r}", file=sys.stderr)

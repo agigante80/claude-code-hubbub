@@ -164,8 +164,16 @@ def migrate_legacy_data_dir() -> None:
         # was wrong in the other direction too: it also fires on the late
         # `os.rename(src, aside)`, where returning quietly would leave a
         # half-drained real directory and call it success.
-        if not _migration_complete(legacy, new):
-            _migration_warn(f"could not migrate {legacy} → {new}: {e}")
+        if _migration_complete(legacy, new):
+            return
+        if isinstance(e, FileNotFoundError) and not os.path.lexists(legacy) \
+                and new.exists():
+            # A peer has done the rename and is a few instructions away from
+            # the marker and the symlink. With `when: "always"` N sessions open
+            # together, so warning here means N-1 apparent failures on the one
+            # run that actually succeeds.
+            return
+        _migration_warn(f"could not migrate {legacy} → {new}: {e}")
 
 
 # Regenerable artifacts: colliding copies of these can be set aside without
@@ -194,7 +202,12 @@ def _drain_into(src: Path, dst: Path) -> bool:
         # machine. With `when: "always"` every session runs this at open, so
         # the window gets hit for real.
         return True
-    collisions = {e.name for e in src.iterdir() if (dst / e.name).exists()}
+    # lexists, like _free_aside_path: a *dangling* symlink at dst/token reports
+    # exists() == False, so it would not count as a collision and os.rename
+    # would silently replace it — walking straight past the "both hold live
+    # state, refuse loudly" guard.
+    collisions = {e.name for e in src.iterdir()
+                  if os.path.lexists(dst / e.name)}
     live = collisions - _DISPOSABLE
     if live:
         # Both sides hold real bus state under the same name, so the fork has
@@ -220,7 +233,7 @@ def _drain_into(src: Path, dst: Path) -> bool:
     for e in live_entries:
         dest = dst / e.name
         try:
-            if dest.exists():
+            if os.path.lexists(dest):
                 # Recheck immediately before the rename: `collisions` was
                 # computed a loop ago, and with `when: "always"` a peer
                 # entry-point can call ensure_token() in that window. os.rename
@@ -251,7 +264,7 @@ def _drain_into(src: Path, dst: Path) -> bool:
         stuck = []
         for e in (x for x in pending if x.name in _DISPOSABLE):
             try:
-                if (dst / e.name).exists():
+                if os.path.lexists(dst / e.name):
                     stuck.append(e.name)
                     continue
                 os.rename(e, dst / e.name)
@@ -690,32 +703,30 @@ def _pidfile_meta_matches(
 def listener_lock_held(lock_path: Path) -> bool:
     """True iff a live monitor holds this session's listener flock.
 
-    The authority for "is this session connected", replacing a cmdline
-    substring check that could not tell one session's monitor from another's.
-    That mattered because `list.py --self` prints a pid the disconnect flow
-    tells an agent to `kill`: a SIGKILLed monitor leaves its state file behind,
-    and once that pid is reused — plausibly by *another session's* client.py —
-    a match on the string "client.py" would have aimed the kill at a live peer.
+    Used with — not instead of — a liveness check on the pid in the state
+    file. The flock proves *a* monitor holds this session's lock; it does not
+    prove the state file was written by that monitor, because a respawned
+    monitor takes the lock in run() and only writes state after the server is
+    up and `hello` is answered. Requiring both keeps `list.py --self` from
+    printing a dead monitor's pid, which the disconnect flow hands to `kill`.
 
-    The flock cannot be confused that way. It is held for the monitor's
-    lifetime, released by the kernel when it dies however it dies, and keyed by
-    the CC ancestor pid, so it answers about *this* session specifically.
+    Read-only: no O_CREAT, so probing a session that never had a monitor does
+    not litter `clients/` with lock files.
     """
-    fd = None
     try:
-        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+        fd = os.open(str(lock_path), os.O_RDONLY)
+    except FileNotFoundError:
+        return False  # never had a monitor
+    except OSError:
+        return True   # cannot tell; "held" is the non-destructive answer
+    try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return False  # we took it, so nobody was holding it
-    except OSError as e:
-        if e.errno in (errno.EAGAIN, errno.EACCES):
-            return True
-        # Can't tell (no permission, path gone). Say "held": the alternative
-        # invites a caller to delete live state or spawn a duplicate.
+    except OSError:
         return True
     finally:
-        if fd is not None:
-            # Closing releases the lock if we took it — this is only a probe.
-            os.close(fd)
+        # Closing releases the lock if we took it — this is only a probe.
+        os.close(fd)
 
 
 def _cmdline_port_matches(cmdline: list[str], port: int | None) -> bool:

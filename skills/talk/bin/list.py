@@ -84,7 +84,15 @@ async def _run(args) -> int:
         # agent to kill.
         lock_path = state_path.with_name(
             state_path.name[: -len(".session")] + ".lock")
-        if not shared.listener_lock_held(lock_path):
+        # Both signals, pid first. The flock proves *a* monitor holds this
+        # session's lock but not that it wrote this state file: a respawned
+        # monitor takes the lock in run() and writes state only after the
+        # server is up, so during reconnect backoff the lock is held while the
+        # file still names the previous, dead pid — which is the pid the
+        # disconnect flow would tell an agent to kill. Checking the pid first
+        # also keeps the flock probe off the path when it is already answered.
+        pid_alive = shared.safe_pid_alive(int(listener_pid)) if listener_pid else False
+        if not (pid_alive and shared.listener_lock_held(lock_path)):
             # No live listener. TOCTOU-safe cleanup — unlink_if_matches
             # re-checks under the same flock and refuses if one reappeared.
             if discover.unlink_if_matches(state_path, state):

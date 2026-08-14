@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import subprocess
+import threading
 import sys
 import time
 import uuid
@@ -622,3 +623,50 @@ class TestAutoStartedNoticesAreQuiet:
             held.close()
         assert "already running" in r.stderr
         assert "already running" not in r.stdout
+
+
+class TestPpidLockRetriesPastAProbe:
+    """`list.py --self` takes the listener flock non-blocking to decide
+    staleness. A real holder keeps it for its lifetime, so contention that
+    clears in milliseconds is a probe — concluding "already running" from it
+    makes a starting monitor exit as a spurious duplicate, which
+    `when: "always"` turns into a routine race against status checks."""
+
+    def test_momentary_holder_does_not_read_as_a_duplicate(self, tmp_path, monkeypatch):
+        sys.path.insert(0, str(BIN_DIR.parent))
+        from bin import client as client_mod
+
+        monkeypatch.setenv("HUBBUB_DATA_DIR", str(tmp_path))
+        lock = tmp_path / "clients" / "999.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.touch()
+        held = open(lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        def release_soon():
+            time.sleep(0.08)
+            held.close()
+
+        t = threading.Thread(target=release_soon)
+        t.start()
+        try:
+            fd = client_mod._acquire_ppid_lock(999)
+            assert fd is not None, "gave up on a lock that was only being probed"
+            os.close(fd)
+        finally:
+            t.join()
+
+    def test_real_holder_still_reads_as_a_duplicate(self, tmp_path, monkeypatch):
+        sys.path.insert(0, str(BIN_DIR.parent))
+        from bin import client as client_mod
+
+        monkeypatch.setenv("HUBBUB_DATA_DIR", str(tmp_path))
+        lock = tmp_path / "clients" / "998.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.touch()
+        held = open(lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            assert client_mod._acquire_ppid_lock(998) is None
+        finally:
+            held.close()

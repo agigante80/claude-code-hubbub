@@ -1204,7 +1204,19 @@ class TestListenerLockHeld:
     *live peer's* client.py would have been offered as the kill target."""
 
     def test_false_when_nobody_holds_it(self, tmp_path):
-        assert shared.listener_lock_held(tmp_path / "1.lock") is False
+        lock = tmp_path / "1.lock"
+        lock.touch()
+        assert shared.listener_lock_held(lock) is False
+
+    def test_missing_lock_file_is_not_held(self, tmp_path):
+        assert shared.listener_lock_held(tmp_path / "never-existed.lock") is False
+
+    def test_probing_creates_nothing(self, tmp_path):
+        """A read-only query must not litter clients/ with lock files — and
+        O_CREAT on a full or read-only filesystem would fail into the
+        catch-all, reporting a session with no monitor as connected."""
+        shared.listener_lock_held(tmp_path / "absent.lock")
+        assert list(tmp_path.iterdir()) == []
 
     def test_true_while_a_holder_lives(self, tmp_path):
         lock = tmp_path / "1.lock"
