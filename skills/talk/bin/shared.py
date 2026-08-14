@@ -135,6 +135,10 @@ def migrate_legacy_data_dir() -> None:
                 os.rename(legacy, new)
             elif not _drain_into(legacy, new):
                 return
+            # `uv venv` creates the dir with the default umask, so an
+            # install-deps-first machine would otherwise leave the bearer
+            # token sitting in a 0755 directory.
+            secure_dir(new)
             _mark_migrated(new)
             _link_legacy(legacy, new)
         elif not legacy.exists() and (new / MIGRATION_MARKER).is_file():
@@ -193,29 +197,53 @@ def _drain_into(src: Path, dst: Path) -> bool:
             f"new builds will use separate tokens until this is resolved by hand."
         )
         return False
-    stuck = []
-    for e in src.iterdir():
-        if e.name in collisions:
-            continue
+    # Live state first, and all-or-nothing. Bailing out *after* moving some of
+    # it is the same fork by another route: `token` stuck behind while
+    # `clients/` and the pidfile have already gone leaves no symlink and no
+    # marker, so the next client mints a fresh token, connected peers get
+    # `unauthorized`, and the run after that sees `token` on both sides and
+    # refuses for good.
+    # Sorted: the order decides which entries are already moved when a later
+    # one fails, so it should not vary with directory layout between runs.
+    pending = sorted((e for e in src.iterdir() if e.name not in collisions),
+                     key=lambda e: e.name)
+    live_entries = [e for e in pending if e.name not in _DISPOSABLE]
+    moved: list[tuple[Path, Path]] = []
+    for e in live_entries:
+        dest = dst / e.name
         try:
+            if dest.exists():
+                # Recheck immediately before the rename: `collisions` was
+                # computed a loop ago, and with `when: "always"` a peer
+                # entry-point can call ensure_token() in that window. os.rename
+                # would silently replace the live token with the legacy one.
+                raise FileExistsError(f"{dest} appeared while draining")
+            os.rename(e, dest)
+            moved.append((dest, e))
+        except OSError as err:
+            _migration_warn(f"could not move {e.name} out of {src}: {err}")
+            for dest, origin in reversed(moved):
+                try:
+                    os.rename(dest, origin)
+                except OSError as back:
+                    _migration_warn(f"could not put {origin.name} back: {back}")
+            _migration_warn(f"leaving {src} in place; live state must not be "
+                            f"relocated behind a running bus")
+            return False
+
+    stuck = []
+    for e in (x for x in pending if x.name in _DISPOSABLE):
+        try:
+            if (dst / e.name).exists():
+                stuck.append(e.name)
+                continue
             os.rename(e, dst / e.name)
         except OSError:
-            # Keep going rather than propagating. A half-drained `src` that
-            # never reaches the symlink below is the split namespace this whole
-            # function exists to avoid, and the next run would then see a live
-            # collision and refuse permanently.
+            # Regenerable, so a failure here is not worth abandoning the
+            # migration over — the set-aside path below handles the remainder.
             stuck.append(e.name)
     if stuck:
         _migration_warn(f"could not move {sorted(stuck)} out of {src}")
-        if set(stuck) - _DISPOSABLE:
-            # Live state that would not move. Setting it aside and symlinking
-            # anyway relocates the token out of the live path: the next client
-            # mints a fresh one and every peer still holding the old one gets
-            # `unauthorized` on reconnect. Stopping leaves the pre-existing
-            # (already imperfect) state instead of actively breaking the bus.
-            _migration_warn(f"leaving {src} in place; live state could not be "
-                            f"moved and must not be relocated behind the bus")
-            return False
     try:
         src.rmdir()
     except OSError:

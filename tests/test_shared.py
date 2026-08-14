@@ -597,6 +597,61 @@ class TestLegacyDataDirMigration:
         assert (self.new / "token").read_text() == "live"
         assert "venv" in capsys.readouterr().err
 
+    def test_stuck_live_state_rolls_back_what_already_moved(
+            self, monkeypatch, capsys):
+        """Bailing out *after* moving some live state is the same fork by
+        another route: token stuck behind while clients/ and the pidfile have
+        gone leaves no symlink and no marker, so the next client mints a fresh
+        token and connected peers get `unauthorized`."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "clients").mkdir()
+        (self.legacy / "messages.log").write_text("log")
+        (self.legacy / "token").write_text("live")
+        self.new.mkdir(parents=True)
+        self._refuse(monkeypatch, "token")
+        shared.migrate_legacy_data_dir()
+        assert not self.legacy.is_symlink()
+        # Everything is back where it started — no half-migrated split.
+        assert (self.legacy / "token").read_text() == "live"
+        assert (self.legacy / "clients").is_dir()
+        assert (self.legacy / "messages.log").read_text() == "log"
+        assert not (self.new / "clients").exists()
+        assert not (self.new / "messages.log").exists()
+        assert not (self.new / shared.MIGRATION_MARKER).exists()
+
+    def test_entry_appearing_mid_drain_is_not_clobbered(self, monkeypatch, capsys):
+        """`collisions` is computed a loop earlier. With when: "always" a peer
+        can reach ensure_token() in that window, and os.rename would silently
+        replace the live token with the legacy one."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "clients").mkdir()
+        (self.legacy / "token").write_text("legacy")
+        self.new.mkdir(parents=True)
+        real_rename = os.rename
+
+        def peer_writes_token(src, dst):
+            out = real_rename(src, dst)
+            if Path(src).name == "clients":
+                (self.new / "token").write_text("live")  # a peer got there
+            return out
+
+        monkeypatch.setattr(shared.os, "rename", peer_writes_token)
+        shared.migrate_legacy_data_dir()
+        assert (self.new / "token").read_text() == "live", (
+            "the legacy token overwrote the one a peer had just minted"
+        )
+        assert not self.legacy.is_symlink()
+
+    def test_migrated_dir_is_locked_down(self):
+        """`uv venv` creates hubbub/ with the default umask, and the bearer
+        token ends up inside it."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        self.new.mkdir(parents=True, mode=0o755)
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert stat.S_IMODE(os.stat(self.new).st_mode) == 0o700
+
     def test_stuck_live_state_aborts_rather_than_relocating_the_token(
             self, monkeypatch, capsys):
         """The opposite call for live state. Setting the token aside and

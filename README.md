@@ -193,9 +193,12 @@ invoke `/hubbub:talk`.
 
 By default the monitor starts at **every session open**, so a session is
 reachable by its peers without anyone having to invoke anything in it
-first. If you would rather sessions opt in, `/hubbub:talk auto-start off`
-makes the monitor lazy — it then spins up the first time you invoke a
-`/hubbub:talk` command in that session. Either way, apply the change with
+first. If you would rather sessions opt in, `/hubbub:talk auto-start off` stops
+the plugin starting a monitor at all — it records the choice under the
+data directory as well as in the plugin manifest, so a later
+`/plugin update` cannot quietly hand always-on back to you. Connecting
+still works exactly as before: `/hubbub:talk connect` starts the monitor
+itself and is unaffected by the opt-out. Apply the change with
 `/reload-plugins`.
 
 ## Examples
@@ -357,7 +360,7 @@ collaboration.
 | `/hubbub:talk relabel <text>`                  | Change this session's label in place (no reconnect); `""` clears. Persists per project. |
 | `/hubbub:talk status`                          | Heuristic connection state.                                    |
 | `/hubbub:talk disconnect`                      | Stop the monitor.                                              |
-| `/hubbub:talk auto-start [on\|off\|status]`    | Toggle auto-start. `on` = start at every session (default); `off` = lazy. Apply with `/reload-plugins`. |
+| `/hubbub:talk auto-start [on\|off\|status]`    | Toggle auto-start. `on` = start at every session (default); `off` = no auto-start (`/hubbub:talk connect` still works). Apply with `/reload-plugins`. |
 
 ## Session labels
 

@@ -154,6 +154,20 @@ def _read_existing_session_state(ppid: int) -> Optional[dict]:
         return None
 
 
+def _print_unless_auto(line: str, from_monitor: bool) -> None:
+    """Housekeeping notices that are worth a notification when the *user* asked
+    to connect, and pure noise when CC auto-started the monitor.
+
+    With `when: "always"` this runs in every session on the machine, including
+    ones whose user has never used hubbub — so a stdout line here means a
+    notification before they have typed anything. stderr still reaches the
+    monitor's output file, so nothing is lost, it just stops interrupting."""
+    if from_monitor:
+        print(line, file=sys.stderr, flush=True)
+    else:
+        _print_line(line)
+
+
 class Client:
     def __init__(
         self,
@@ -165,12 +179,16 @@ class Client:
         ppid: Optional[int] = None,
         verbose: bool = False,
         max_collision_retries: int = 3,
+        from_monitor: bool = False,
     ):
         self.port = port
         self.host = host
         self.name = name
         self.label = label
         self.idle_shutdown_minutes = idle_shutdown_minutes
+        # CC auto-started us: routine housekeeping notices go to stderr rather
+        # than becoming a notification in a session nobody asked to connect.
+        self.from_monitor = from_monitor
         self.ppid = ppid if ppid is not None else _resolve_ppid()
         self.verbose = verbose
         self.session_id = str(uuid.uuid4())
@@ -288,9 +306,10 @@ class Client:
                         old_name = self.name
                         self.name = new_name
                         self._collision_retries += 1
-                        _print_line(
+                        _print_unless_auto(
                             f"[inter-session] name {old_name!r} taken; "
-                            f"using {new_name!r}"
+                            f"using {new_name!r}",
+                            self.from_monitor,
                         )
                         return  # main loop will reconnect with self.name = new_name
                     # Out of retries — surface and stop. Caller picks a new name.
@@ -476,15 +495,16 @@ def main() -> int:
         final_name = shared.auto_name_from_cwd()
         if final_name:
             auto_named = True
-            _print_line(
+            _print_unless_auto(
                 f"[inter-session] no --name given; auto-named {final_name!r} "
-                f"from cwd (rename with /hubbub:talk rename)"
+                f"from cwd (rename with /hubbub:talk rename)",
+                args.from_monitor,
             )
 
     client = Client(
         host=args.host, port=args.port, name=final_name, label=final_label,
         idle_shutdown_minutes=args.idle_shutdown_minutes,
-        verbose=args.verbose,
+        verbose=args.verbose, from_monitor=args.from_monitor,
     )
 
     loop = asyncio.new_event_loop()
