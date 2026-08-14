@@ -562,6 +562,15 @@ def _still_on_legacy(legacy: Path, new: Path) -> bool:
         # the opposite of what it says: data_dir() returned `hubbub/`,
         # ensure_token() minted a fresh token there, and every connected peer
         # started getting `unauthorized`. The live token is behind the link.
+        #
+        # Only when the link actually leads somewhere, though. `resolve()` is
+        # non-strict, so a dangling link (relocation target deleted, external
+        # volume unmounted) and a symlink loop both resolve happily to a path
+        # that cannot be opened or created — and routing state there replaced a
+        # session that used to run fine on `hubbub/` with `ensure_token`
+        # raising FileExistsError straight out of client.py's startup.
+        if not legacy.is_dir():
+            return False
         try:
             return legacy.resolve() != new.resolve()
         except OSError:
@@ -667,10 +676,11 @@ def client_lock_path(ppid: int) -> Path:
 def lock_path_for_session_file(session_path: Path) -> Path:
     """`clients/<key>.session` → `clients/<key>.lock`.
 
-    Third copy of this convention was drifting into `list.py`. If the naming
-    ever changes, a stale copy makes `listener_lock_held` open a file that is
-    not there, report "not held", and have every connected session report
-    `not connected (stale state cleaned up)` — with the state file deleted.
+    The derivation had drifted into two call sites alongside
+    `client_lock_path`. If the naming ever changes, a stale copy makes
+    `listener_lock_held` open a file that is not there, report "not held", and
+    have every connected session report `not connected (stale state cleaned
+    up)` — with the state file deleted.
     """
     name = session_path.name
     if name.endswith(".session"):
