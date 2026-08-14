@@ -274,7 +274,7 @@ class Client:
                     _print_line(
                         f"[inter-session] name {self.name!r} taken after "
                         f"{self._collision_retries} retries; "
-                        f"run /inter-session connect <other-name>"
+                        f"run /hubbub:talk connect <other-name>"
                     )
                     self._stop.set()
                     return
@@ -424,7 +424,7 @@ def main() -> int:
             auto_named = True
             _print_line(
                 f"[inter-session] no --name given; auto-named {final_name!r} "
-                f"from cwd (rename with /inter-session rename)"
+                f"from cwd (rename with /hubbub:talk rename)"
             )
 
     client = Client(
@@ -442,7 +442,7 @@ def main() -> int:
     try:
         return loop.run_until_complete(client.run())
     except ImportError as e:
-        _print_line(f"[inter-session] dependencies missing — run /inter-session install-deps ({e})")
+        _print_line(f"[inter-session] dependencies missing — run /hubbub:talk install-deps ({e})")
         return 0
     finally:
         loop.close()
@@ -452,6 +452,6 @@ if __name__ == "__main__":
     try:
         import websockets  # noqa: F401
     except ImportError:
-        _print_line("[inter-session] dependencies missing — run /inter-session install-deps")
+        _print_line("[inter-session] dependencies missing — run /hubbub:talk install-deps")
         sys.exit(0)
     sys.exit(main())

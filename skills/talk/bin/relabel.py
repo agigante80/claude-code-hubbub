@@ -37,7 +37,7 @@ async def _run(args) -> int:
 
     state, state_path = discover.find_listener_state_with_path()
     if state is None:
-        print("not connected; run /inter-session in this Claude Code session first",
+        print("not connected; run /hubbub:talk in this Claude Code session first",
               file=sys.stderr)
         return 1
 
@@ -78,7 +78,7 @@ async def _run(args) -> int:
             code = welcome.get("code", "")
             if code in (shared.ErrorCode.UNKNOWN_PEER, shared.ErrorCode.UNAUTHORIZED):
                 discover.unlink_if_matches(state_path, state)
-                print("not connected; run /inter-session in this Claude Code session first",
+                print("not connected; run /hubbub:talk in this Claude Code session first",
                       file=sys.stderr)
                 return 1
             print(f"hello error: {code} {welcome.get('message', '')}", file=sys.stderr)
@@ -115,6 +115,6 @@ if __name__ == "__main__":
     try:
         import websockets  # noqa: F401
     except ImportError:
-        print("dependencies missing — run /inter-session install-deps", file=sys.stderr)
+        print("dependencies missing — run /hubbub:talk install-deps", file=sys.stderr)
         sys.exit(1)
     sys.exit(main())
