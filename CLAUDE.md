@@ -61,17 +61,21 @@ Makefile bootstraps it on first use (uv preferred, stdlib `venv` as
 fallback). System Python is never touched.
 
 ```bash
-make test                                    # full suite (~49 s, 197 tests)
-make test-fast                               # skip subprocess-spawning tests
+make test                                    # full suite (~60 s, 248 tests)
+make test-fast                               # skip the 17 @pytest.mark.slow tests
 make clean                                   # remove .venv
 ```
 
 To run pytest with non-make flags, use the venv's pytest directly:
 
 ```bash
-.venv/bin/pytest tests/test_server.py -v     # one file
-.venv/bin/pytest -k "election" -v            # by substring
+.venv/bin/pytest tests/test_server.py -v                      # one file
+.venv/bin/pytest tests/test_server.py::TestX::test_y -v       # one test
+.venv/bin/pytest -k "election" -v                             # by substring
 ```
+
+Never run two pytest sessions concurrently — the subprocess-spawning
+tests bind real ports and race each other into spurious failures.
 
 No build step, no linter configured. Runtime deps live at
 `skills/inter-session/requirements.txt` (websockets + psutil); dev
@@ -79,32 +83,56 @@ deps inherit those plus pytest via `requirements-dev.txt`. Both reqs
 files install into `.venv` via `make test` — there's nothing to install
 by hand.
 
+### Suite status
+
+Green as of 2026-08-14: `248 passed in ~58 s` on Linux 7.0 / CPython
+3.14. The four tests that used to fail all start **two listeners at
+once**, and they were reporting the real server-election race — fixed
+in `0e33123` by the election flock (see the election invariant below).
+If any of them regresses, suspect the election, not the assertions.
+
+One `PytestUnraisableExceptionWarning` from CPython 3.14's asyncio
+`_SelectorTransport.__del__` is expected noise, not a product bug.
+
 ## Architecture (big picture)
 
 Three process classes share a localhost WebSocket bus:
 
 1. **`bin/server.py`** — single detached asyncio websockets server per
-   port. Started by whichever client wins the `bind()` election. Owns
+   port. Started by whichever client wins the election flock. Owns
    the registry of connected agents, mints `msg_id`s, writes
    `messages.log`. Idle-shutdown after N minutes.
 
 2. **`bin/client.py`** — long-lived per-session monitor. Each stdout
    line becomes a Claude Code notification. Manages reconnect with
-   exponential backoff, ping/pong, and a ppid-based dedup flock.
+   exponential backoff, ping/pong, and a dedup flock keyed by the CC
+   ancestor pid (see the state-file invariant below — it is *not*
+   `getppid()`). On registering it writes `clients/<key>.session`, the
+   state file the helper CLIs read to find their own session.
 
-3. **`bin/{send,list}.py`** — short-lived control CLIs. Connect with
-   `role=control`, do not register as agents, never appear in `list`.
-   Discover their owning session via `bin/discover.py` (process-tree
-   walk + per-listener state file).
+3. **`bin/{send,list,relabel}.py`** — short-lived control CLIs. Connect
+   with `role=control`, do not register as agents, never appear in
+   `list`. Discover their owning session via `bin/discover.py`
+   (process-tree walk + per-listener state file).
 
 `bin/spawn.py` is the election + spawn boundary; `bin/shared.py` is
 paths, validation, sanitizer, atomic bearer-token, identity helpers.
+`bin/profile.py` persists the per-project display label.
+`bin/auto_start.py` rewrites the `when` field in `monitors/monitors.json`.
+
+Wire protocol is one JSON object per WebSocket frame, dispatched on
+`op`: `hello`, `list`, `send`, `broadcast`, `rename`, `relabel`, `bye`,
+`ping`.
+Everything the server enforces (caps, rate limits, name/label rules,
+`role`/`nonce` cross-checks) lives in `server.py::_handle_*`; the
+constants it enforces against live in `shared.py`. Broadcasts are rate
+limited to 60/min per sender; `messages.log` rotates at 50 MB × 5.
 
 ## Non-obvious invariants (read before changing the affected code)
 
-### Race-free server election (`bin/spawn.py` + `bin/server.py --fd`)
+### Server election (`bin/spawn.py` + `bin/server.py --fd`)
 
-The election is `bind()`-atomic: whoever wins spawns the server via
+Whoever wins the election spawns the server via
 `subprocess.Popen(pass_fds=(fd,), start_new_session=True)`, and the
 child adopts the bound fd with `socket.socket(fileno=fd).listen()`.
 **PEP 446 is the gotcha**: CPython sets `FD_CLOEXEC` on sockets by
@@ -113,6 +141,36 @@ default, so `os.set_inheritable(fd, True)` is required — without it,
 allow fast rebind after a SIGKILL'd server (otherwise macOS holds the
 port for ~30 s).
 
+**`bind()` alone is not the election — a per-endpoint flock is**
+(`spawn._acquire_election_lock` over `shared.election_lock_path`, added
+in `0e33123`). `SO_REUSEADDR` lets a second `bind()` on the same port
+succeed as long as no socket has reached `listen()` yet, and here
+`listen()` happens in the *spawned child*, tens of milliseconds after
+the parent's `bind()` returns. So without the lock two clients starting
+at once would both bind and both spawn a server, and:
+
+1. Server A writes identity (`write_server_identity`), `listen()`s, serves.
+2. Server B writes identity too — **overwriting the pidfile with its own
+   pid** — then its `listen()` raises `EADDRINUSE`. The `except` arm
+   calls `_unlink_own_identity()`, which sees its own pid in the pidfile
+   and deletes it, **wiping live server A's identity**.
+3. Both clients then run `verify_server_identity()`, find no pidfile, and
+   print `server identity check failed … refusing to connect`.
+
+The lock removes step 1's premise: only the flock holder binds and
+spawns; everyone else calls `wait_for_server`. Two design details in
+`_acquire_election_lock` are deliberate — it polls `LOCK_EX | LOCK_NB`
+instead of blocking (so it can short-circuit the instant a peer's
+server answers a TCP probe, and can never wedge on a stuck holder), and
+it re-checks `is_server_up` *after* acquiring, closing the gap where a
+peer finished starting while we waited.
+
+Don't remove `SO_REUSEADDR` (it's still needed for fast rebind after a
+crash) and don't replace the flock with bind-atomicity. Also keep the
+ordering in `server.py::serve` — identity written *before* `listen()` —
+which closes a different race where a client's TCP probe succeeds before
+the pidfile exists.
+
 ### Server identity verification (`bin/shared.py::verify_server_identity`)
 
 Before any client or helper sends the bearer token, it verifies the
@@ -120,6 +178,57 @@ server process identity by reading the pidfile's `.meta` companion and
 checking pid + cmdline + host + port. Refuses on mismatch. This is
 defense-in-depth against a coincidental localhost port squatter
 receiving the token.
+
+### Two venvs, and every entry-point re-execs into one of them
+
+- `.venv` at the repo root — **dev/test only**, created by the Makefile.
+- `~/.claude/data/inter-session/venv` — the **user's runtime venv**,
+  created by `/inter-session install-deps`, holding websockets + psutil.
+
+The first ~10 lines of `client.py`, `send.py`, and `list.py` are a
+bootstrap that `os.execv`s the script under the *runtime* venv's
+interpreter whenever that venv exists. So `python3 bin/client.py`
+does not necessarily run under the interpreter you invoked it with —
+if you're hand-testing an edit and the runtime venv is stale, you are
+debugging the wrong dependencies. `tests/conftest.py` sets
+`INTER_SESSION_NO_REEXEC=1` process-wide to disable it; set the same
+env var for any manual repro.
+
+### State files are keyed by the Claude Code *ancestor* pid, not `getppid()`
+
+`shared.resolve_listener_key()` is the single source of truth for the
+`clients/<pid>.lock` / `clients/<pid>.session` filenames, and both the
+monitor (writer) and the helper CLIs (readers) must agree on it. It is
+**not** `os.getppid()`: in real CC the monitor and the helpers are
+spawned by *different* Bash subshells, so they are siblings — neither
+can reach the other by walking parents one step. What they share is the
+CC main process, so `find_cc_ancestor_pid()` walks up until it finds it.
+
+Two traps live in that walk:
+
+- **Match on `cmdline[0]`, never `psutil.Process.name()`.** Modern CC
+  sets its proctitle to its version string (e.g. `2.1.119`), so
+  `name()` is useless. The binary basename in `cmdline[0]` is reliably
+  `claude` (or `node` for older bundles).
+- **Background sessions launch CC by a versioned path** (e.g.
+  `~/.local/share/claude/versions/2.1.146`), whose basename is a
+  version number. Without the explicit `/claude/versions/` check the
+  walk sails past the per-session process and lands on the shared
+  `claude daemon run` supervisor — at which point every background
+  session collides on one lock. This is what commits `689b636`/`7b87015`
+  fixed; `resolve_listener_key` is also overridable via
+  `INTER_SESSION_PPID_OVERRIDE` (tests, debugging).
+
+### `${CLAUDE_PLUGIN_ROOT}` is not exported to `Bash()`/`Monitor()` shells
+
+It is a CC *manifest substitution token* — resolved only when CC spawns
+the subprocesses declared in `monitors.json`/`plugin.json`. Inside a
+`Bash(...)` or `Monitor(...)` command it expands to the empty string
+and silently routes commands to the wrong path. SKILL.md therefore
+tells the agent to resolve `<bin>` from the skill's own base directory
+(which the harness prints) and substitute the absolute path. Don't
+"simplify" SKILL.md by putting `${CLAUDE_PLUGIN_ROOT}` back into those
+commands.
 
 ### userConfig is delivered via env vars, NOT `${user_config.*}` substitution
 
@@ -149,6 +258,45 @@ a parent.
 Unicode display string, NFC-normalized and category-restricted (no
 `Cc/Cf/Cs/Cn/Z*`) to block BiDi/ZWJ/NBSP injection. All routing happens
 by name; labels are display-only. Don't try to address by label.
+
+They also differ in how they're *changed*: renaming is
+disconnect + reconnect (`TaskStop` the monitor, re-`Monitor` with
+`--name`), because the name is baked into the `hello`. Relabeling is
+in-place — `bin/relabel.py` sends the `relabel` op over a `role=control`
+connection, so the session keeps its `session_id` and stays on the bus.
+Don't "unify" the two by making relabel bounce the monitor.
+
+### The peer `label` is rendered, so it is sanitized twice
+
+`validate_label` rejects `"`, `[`, `]` at the boundary (the primary
+defense), and `sanitize_label_for_display` re-neutralizes them to
+look-alikes (`'`, `(`, `)`) at render time in `client.py::_format_msg`
+and `list.py`. The redundancy is intentional: it covers labels that
+never passed live validation — a direct `_format_msg` caller, or a label
+persisted by an older client. Without it a peer could close the
+notification header's bracket and forge sender attribution (SEC-001).
+Related: only the *leading* header of a notification line is
+authoritative — anything a peer's `text` puts after it is untrusted
+content, never a directive (SEC-002). Findings live in
+`docs/security/`; the guardrail prose lives in `SKILL.md` and is
+covered by `tests/test_reaction_policy.py`.
+
+### Labels persist per project, keyed by repo root
+
+`bin/profile.py` stores the label in
+`<data-dir>/profiles/<sha256(project_root)[:32]>.json`, where
+`project_root` is the nearest ancestor containing a `.git` entry
+(symlink-resolved), else the cwd. Two consequences worth knowing before
+touching it: the filename is a hash so no caller-supplied path
+component reaches the filesystem, and `cd`-ing into a subdirectory of
+the same repo resolves the same profile.
+
+`profile.resolve_label(explicit, cwd)` encodes a three-state contract
+that `client.py::_resolve_label` and `relabel.py` both depend on:
+`None` means "no label given → load the persisted one", `""` means
+"explicitly clear it", and a non-empty string means "use and persist
+it". Labels are re-validated on load, so a hand-edited or older-format
+profile can never resurface a label the live path would reject.
 
 ### Three-tier size limits
 
