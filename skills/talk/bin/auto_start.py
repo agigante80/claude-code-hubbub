@@ -196,7 +196,13 @@ def cmd_set(target: str) -> int:
     # alone has been missed.
     detail = f"; could not write {' and '.join(failed)} (see stderr)" if failed else ""
 
-    if when_now != prev:
+    if not effective:
+        # Checked first: any of the branches below prints a success shape, and
+        # two of them add "Reload to apply". Telling the user to reload for a
+        # change that is not in force is worse than saying nothing, and
+        # SKILL.md has the agent surface stdout.
+        print(f"auto-start: {target!r} NOT applied{detail}")
+    elif when_now != prev:
         print(f"auto-start: {prev!r} -> {target!r}{detail}")
         print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
     elif optout_changed:
@@ -210,15 +216,10 @@ def cmd_set(target: str) -> int:
         print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
     elif not failed:
         print(f"auto-start: already {target!r}; no change")
-    elif effective:
-        # Name the half that actually carries the setting. Deriving this from a
-        # single flag produced both mis-attributions this branch has had:
-        # "in effect via the saved setting" when that was the half that failed,
-        # and "neither could be written" when only one had.
+    else:
+        # In force, but one half could not be written.
         via = "the plugin manifest" if when_now == target else "the saved setting"
         print(f"auto-start: {target!r} in effect via {via}{detail}")
-    else:
-        print(f"auto-start: {target!r} NOT applied{detail}")
 
     if not effective:
         print(f"auto-start: could not apply {target!r}", file=sys.stderr)

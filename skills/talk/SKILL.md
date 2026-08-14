@@ -447,7 +447,7 @@ split is deliberate:
 - **A monitor Claude Code auto-started** (the default; it passes
   `--from-monitor`) sends *routine* outcomes to stderr instead —
   `auto-named … from cwd`, `another monitor … is already running`,
-  `dependencies missing`. With auto-start on, those would otherwise fire
+  `name … taken; using …-2`, `dependencies missing`. With auto-start on, those would otherwise fire
   once per session on the machine, in projects whose user has never used
   hubbub. They land in the monitor's output file, readable with `Read`
   if you need them.
