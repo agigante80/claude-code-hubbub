@@ -657,14 +657,6 @@ def client_session_path(ppid: int) -> Path:
 
 
 NAME_MAX_LEN = 40
-# Exactly the numeric range this generator produces, and no wider. Stripping
-# any -<digits> rewrote `release-2024` into `release-2`; allowing two digits
-# still ate `sprint-12` into `sprint-2`. Either way a session in one repo
-# registers under the name a session in a *different* repo would be handed, so
-# `send --to sprint-2` reaches the wrong session. Beyond -9 the generator
-# switches to a random suffix, which no repo name plausibly collides with and
-# which this pattern deliberately does not strip.
-_GENERATED_SUFFIX_RE = re.compile(r"-[2-9]$")
 _NUMERIC_CANDIDATES = 8  # -2 … -9
 
 
@@ -688,7 +680,15 @@ def suffixed_name_candidates(name: str, count: int = 3,
     is handed `foo-2`, which is already registered, and burns a retry per hop.
     """
     taken = set(taken or ())
-    stem = _GENERATED_SUFFIX_RE.sub("", name) or name
+    # No suffix stripping. Three rounds of narrowing the pattern
+    # (`release-2024` → `release-2`, then `sprint-12` → `sprint-2`, then
+    # `sprint-3` → `sprint-2`) only shrank a class it could never close: a
+    # trailing `-N` on a cwd-derived name is genuinely ambiguous, and every
+    # wrong guess hands one repo's session the name another repo's session
+    # would get, so `send --to sprint-2` reaches the wrong one. Appending is
+    # unambiguous, and the random fallback below guarantees progression
+    # without it.
+    stem = name
     out: list[str] = []
 
     def _offer(suffix: str) -> None:

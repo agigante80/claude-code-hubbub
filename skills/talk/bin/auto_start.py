@@ -176,6 +176,12 @@ def cmd_set(target: str) -> int:
     # shipped `always` and the session goes always-on with nothing recording
     # that they had turned it off. So for `--on` the manifest write goes first
     # and the flag is only cleared once it has actually landed.
+    # Two different questions, and conflating them mis-reported the exact case
+    # this ordering exists for: `optout_ok` is "the write we attempted
+    # succeeded" (nothing attempted counts as fine), while `optout_present` is
+    # "what is actually on disk". Deriving the first from the second told the
+    # user the saved setting could not be written, and to check stderr, in a
+    # run that never tried to write it and printed no such error.
     optout_ok, optout_changed = (True, False)
     if target == LAZY:
         optout_ok, optout_changed = _set_optout(True)
@@ -190,20 +196,19 @@ def cmd_set(target: str) -> int:
             manifest_ok = False
             print(f"auto-start: could not update {path}: {e}", file=sys.stderr)
 
-    if target != LAZY:
-        if manifest_ok:
-            optout_ok, optout_changed = _set_optout(False)
-        else:
-            # Manifest never took, so leave the opt-out exactly as it was.
-            optout_ok = not shared.autostart_optout_path().exists()
+    if target != LAZY and manifest_ok:
+        optout_ok, optout_changed = _set_optout(False)
+    # else: the manifest never took, so the opt-out is deliberately left as it
+    # was — untouched, not failed.
+    optout_present = shared.autostart_optout_path().exists()
 
     if target == LAZY:
         # Either half alone is enough to be off: the flag makes client.py exit
         # at once even when CC still starts it.
-        effective = optout_ok or when_now == LAZY
+        effective = optout_present or when_now == LAZY
     else:
         # On needs both: a lingering flag would exit the monitor CC just spawned.
-        effective = optout_ok and when_now == ALWAYS
+        effective = (not optout_present) and when_now == ALWAYS
 
     failed = ([] if manifest_ok else ["the plugin manifest"]) + \
             ([] if optout_ok else ["the saved setting"])
