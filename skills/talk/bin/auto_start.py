@@ -164,11 +164,21 @@ def cmd_set(target: str) -> int:
     entry = _find_entry(monitors)
     prev = entry.get("when", "always")
 
-    # From here the two halves are applied independently. Neither is allowed to
-    # abort the other: the durable flag is what survives `/plugin update`, and
-    # the manifest is what CC actually reads at session open. Ordering them
-    # differently only chooses which one gets dropped when the other fails.
-    optout_ok, optout_changed = _set_optout(target == LAZY)
+    # The two halves are applied independently — neither may abort the other —
+    # but the *order* is not symmetric, because only one of them destroys
+    # information.
+    #
+    # `--off` writes the flag: additive, and the fail-safe direction, so doing
+    # it first means a failed manifest write still leaves the session off.
+    # `--on` *deletes* the flag. Doing that first and then failing the manifest
+    # write reported `NOT applied` while having already thrown away the user's
+    # durable opt-out — after which the next `/plugin update` restores the
+    # shipped `always` and the session goes always-on with nothing recording
+    # that they had turned it off. So for `--on` the manifest write goes first
+    # and the flag is only cleared once it has actually landed.
+    optout_ok, optout_changed = (True, False)
+    if target == LAZY:
+        optout_ok, optout_changed = _set_optout(True)
 
     when_now, manifest_ok = prev, True
     if prev != target:
@@ -179,6 +189,13 @@ def cmd_set(target: str) -> int:
         except OSError as e:
             manifest_ok = False
             print(f"auto-start: could not update {path}: {e}", file=sys.stderr)
+
+    if target != LAZY:
+        if manifest_ok:
+            optout_ok, optout_changed = _set_optout(False)
+        else:
+            # Manifest never took, so leave the opt-out exactly as it was.
+            optout_ok = not shared.autostart_optout_path().exists()
 
     if target == LAZY:
         # Either half alone is enough to be off: the flag makes client.py exit

@@ -338,3 +338,37 @@ class TestFailureReporting:
         assert "the plugin manifest" in r.stdout
         assert "the saved setting" in r.stdout
         assert r.returncode == 1
+
+
+class TestOnDoesNotDestroyTheOptOutOnFailure:
+    """`--on` deletes the durable flag. Doing that before the manifest write
+    meant a read-only plugin dir reported `NOT applied` while the user's
+    opt-out was already gone — and the next `/plugin update` restores the
+    shipped `always`, so the session goes always-on with nothing left
+    recording that they turned it off."""
+
+    def test_optout_survives_a_failed_manifest_write(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "autostart-off").touch()
+        monitors = fake_plugin_root / "monitors"
+        monitors.chmod(0o500)
+        try:
+            r = _run(["--on"], fake_plugin_root, data_dir=data)
+        finally:
+            monitors.chmod(0o700)
+        assert r.returncode == 1, r.stdout
+        assert "NOT applied" in r.stdout
+        assert (data / "autostart-off").exists(), (
+            "durable opt-out destroyed by a command that reported failure"
+        )
+
+    def test_optout_is_cleared_when_the_manifest_lands(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "autostart-off").touch()
+        r = _run(["--on"], fake_plugin_root, data_dir=data)
+        assert r.returncode == 0, r.stderr
+        assert not (data / "autostart-off").exists()

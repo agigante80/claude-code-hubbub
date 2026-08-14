@@ -657,11 +657,15 @@ def client_session_path(ppid: int) -> Path:
 
 
 NAME_MAX_LEN = 40
-# Only the range this generator itself produces. Stripping any -<digits>
-# rewrote `release-2024` into `release-2`, so a session in ~/src/release-2024
-# registered under a name that collides with a different repo's — and
-# `send --to release-2` then reaches the wrong session.
-_GENERATED_SUFFIX_RE = re.compile(r"-([2-9]|[1-9]\d)$")
+# Exactly the numeric range this generator produces, and no wider. Stripping
+# any -<digits> rewrote `release-2024` into `release-2`; allowing two digits
+# still ate `sprint-12` into `sprint-2`. Either way a session in one repo
+# registers under the name a session in a *different* repo would be handed, so
+# `send --to sprint-2` reaches the wrong session. Beyond -9 the generator
+# switches to a random suffix, which no repo name plausibly collides with and
+# which this pattern deliberately does not strip.
+_GENERATED_SUFFIX_RE = re.compile(r"-[2-9]$")
+_NUMERIC_CANDIDATES = 8  # -2 … -9
 
 
 def suffixed_name_candidates(name: str, count: int = 3,
@@ -686,15 +690,25 @@ def suffixed_name_candidates(name: str, count: int = 3,
     taken = set(taken or ())
     stem = _GENERATED_SUFFIX_RE.sub("", name) or name
     out: list[str] = []
-    i = 2
-    while len(out) < count and i < 100:
-        suffix = f"-{i}"
+
+    def _offer(suffix: str) -> None:
         base = stem[: NAME_MAX_LEN - len(suffix)].rstrip("-")
         candidate = f"{base}{suffix}"
         if (base and candidate != name and candidate not in taken
                 and candidate not in out and validate_name(candidate)):
             out.append(candidate)
-        i += 1
+
+    for i in range(2, 2 + _NUMERIC_CANDIDATES):
+        if len(out) >= count:
+            return out
+        _offer(f"-{i}")
+    # -2 … -9 are all spoken for. A wider counter would have to be stripped
+    # back off on the next hop, and every extra digit eats another legitimate
+    # repo name; a random suffix stays unambiguous and still progresses.
+    for _ in range(count * 4):
+        if len(out) >= count:
+            break
+        _offer(f"-{secrets.token_hex(2)}")
     return out
 
 
