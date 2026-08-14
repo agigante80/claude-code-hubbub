@@ -54,6 +54,19 @@ abbreviated label, the actual path is
 
 Single user, single machine. Unix-only (macOS / Linux / WSL2).
 
+## Project memory
+
+Durable notes live in `.claude/memory/`, indexed by `.claude/memory/MEMORY.md`
+— one fact per file, frontmatter with `name` / `description` /
+`metadata.type` (`user`, `feedback`, `project`, `reference`). Read the index
+first; write new memories there, not to the path-keyed store under
+`~/.claude/projects/`, which is orphaned by a checkout rename (that happened
+once already — see `hubbub-local-workspace.md`).
+
+Both `.claude/memory/` and `.claude/handoffs/` are gitignored: they hold
+working notes about the maintainer, and this repo is public. Two lines in
+`.gitignore` to change that.
+
 ## Common commands
 
 Local dev runs entirely in a project-local venv at `.venv`. The
