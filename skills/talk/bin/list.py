@@ -106,9 +106,19 @@ async def _run(args) -> int:
             # The cleanup refused. Two very different reasons, and reporting
             # them the same way is how the disconnect flow gets misled.
             fresh = discover._read_state(state_path)
-            if fresh and fresh.get("session_id") != state.get("session_id"):
-                # A new monitor registered while we were looking: the state we
-                # read was simply out of date and the session is connected.
+            if fresh is None:
+                # The file went away between our read and the cleanup — a
+                # monitor exiting gracefully deletes it in atexit. Saying
+                # "stale state left in place" sends the agent looking for a
+                # file that is already gone.
+                print("not connected")
+                return 0
+            if (fresh.get("session_id") != state.get("session_id")
+                    and shared.safe_pid_alive(fresh.get("listener_pid", 0))
+                    and shared.listener_lock_held(lock_path)):
+                # A new monitor registered while we were looking, and it is
+                # live by the same two signals used above — re-checked rather
+                # than assumed, because the disconnect flow is handed this pid.
                 state, listener_pid = fresh, fresh.get("listener_pid", 0)
             elif shared.listener_lock_held(lock_path):
                 # A monitor holds the lock but the state file still names the
