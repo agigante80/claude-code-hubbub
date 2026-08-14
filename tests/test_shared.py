@@ -1255,3 +1255,49 @@ class TestListenerLockHeld:
         lock = tmp_path / "1.lock"
         assert shared.listener_lock_held(lock) is False
         assert shared.listener_lock_held(lock) is False
+
+
+class TestSafePidAliveSurvivesJunk:
+    """Every caller feeds this a number read off disk — a clients/*.session
+    file or a server pidfile — so it has to survive whatever is in there.
+    os.kill raises OverflowError, which is an ArithmeticError and so slips
+    past `except OSError`, taking down list.py --self with it."""
+
+    def test_pid_too_large_for_a_c_int(self):
+        assert shared.safe_pid_alive(10 ** 30) is False
+
+    def test_non_numeric(self):
+        assert shared.safe_pid_alive("not-a-pid") is False
+        assert shared.safe_pid_alive(None) is False
+
+    def test_zero_and_negative(self):
+        assert shared.safe_pid_alive(0) is False
+        assert shared.safe_pid_alive(-1) is False
+
+    def test_self_is_alive(self):
+        assert shared.safe_pid_alive(os.getpid()) is True
+
+
+class TestAwaitPeerCompletion:
+    def test_symlink_alone_counts(self, tmp_path):
+        """_mark_migrated is best-effort: on ENOSPC the peer warns and still
+        links. Waiting only for the marker would call that a dead peer — after
+        stalling half a second on a machine that migrated fine."""
+        new = tmp_path / "hubbub"
+        new.mkdir()
+        legacy = tmp_path / "inter-session"
+        legacy.symlink_to(new)
+        assert shared._await_peer_completion(legacy, new, timeout_s=0.05) is True
+
+    def test_marker_alone_counts(self, tmp_path):
+        new = tmp_path / "hubbub"
+        new.mkdir()
+        (new / shared.MIGRATION_MARKER).touch()
+        assert shared._await_peer_completion(tmp_path / "inter-session", new,
+                                             timeout_s=0.05) is True
+
+    def test_neither_is_a_dead_peer(self, tmp_path):
+        new = tmp_path / "hubbub"
+        new.mkdir()
+        assert shared._await_peer_completion(tmp_path / "inter-session", new,
+                                             timeout_s=0.05) is False

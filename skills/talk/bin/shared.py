@@ -167,7 +167,7 @@ def migrate_legacy_data_dir() -> None:
         if _migration_complete(legacy, new):
             return
         if isinstance(e, FileNotFoundError) and not os.path.lexists(legacy) \
-                and new.exists() and _await_marker(new):
+                and new.exists() and _await_peer_completion(legacy, new):
             # A peer has done the rename and is a few instructions away from
             # the marker and the symlink. With `when: "always"` N sessions open
             # together, so warning here means N-1 apparent failures on the one
@@ -359,15 +359,18 @@ def _link_legacy(legacy: Path, new: Path) -> None:
             )
 
 
-def _await_marker(new: Path, timeout_s: float = 0.5) -> bool:
-    """Wait briefly for a peer to finish writing its migration marker.
+def _await_peer_completion(legacy: Path, new: Path, timeout_s: float = 0.5) -> bool:
+    """Wait briefly for a peer to finish the migration it just won the rename
+    for. A live peer gets there within microseconds; one that died in between
+    never will.
 
-    A live peer writes it within microseconds of the rename it just won; one
-    that died in between never will. Short enough not to matter at session
-    open, long enough to tell those two apart."""
+    Either the marker *or* the symlink counts. `_mark_migrated` is deliberately
+    best-effort — on ENOSPC or a perms problem it warns and the peer goes on to
+    link and complete correctly — so a marker-only wait would call a fully
+    migrated machine a failure, and stall 500ms before saying so."""
     deadline = time.monotonic() + timeout_s
     while True:
-        if (new / MIGRATION_MARKER).is_file():
+        if (new / MIGRATION_MARKER).is_file() or _legacy_points_at(legacy, new):
             return True
         if time.monotonic() >= deadline:
             return False
@@ -670,7 +673,19 @@ def atomic_write_text(path: Path, text: str, mode: int = 0o600) -> None:
 
 
 def safe_pid_alive(pid: int) -> bool:
-    """True if a process with `pid` is alive (or we can signal 0 to it)."""
+    """True if a process with `pid` is alive (or we can signal 0 to it).
+
+    Every caller feeds this a number read off disk — a `clients/*.session`
+    file or a server pidfile — so it has to survive whatever is in there.
+    `os.kill` raises OverflowError, an ArithmeticError rather than an OSError,
+    for a pid too large for a C int, which no `except OSError` catches: a
+    hand-edited or foreign state file would take down `list.py --self`, the
+    command the disconnect flow depends on.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
     if pid <= 0:
         return False
     try:
@@ -680,7 +695,7 @@ def safe_pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True  # exists but owned by another user
-    except OSError:
+    except (OSError, OverflowError):
         return False
 
 
