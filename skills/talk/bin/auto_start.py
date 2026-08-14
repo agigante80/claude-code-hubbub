@@ -182,33 +182,37 @@ def cmd_set(target: str) -> int:
         # On needs both: a lingering flag would exit the monitor CC just spawned.
         effective = optout_ok and when_now == ALWAYS
 
+    failed = ([] if manifest_ok else ["the plugin manifest"]) + \
+            ([] if optout_ok else ["the saved setting"])
+    # Appended to whichever line below fires. A half that failed has to be
+    # visible even when the other half succeeded and the headline reads like a
+    # clean result — SKILL.md tells the agent to surface stdout, and stderr
+    # alone has been missed.
+    detail = f"; could not write {' and '.join(failed)} (see stderr)" if failed else ""
+
     if when_now != prev:
-        print(f"auto-start: {prev!r} -> {target!r}")
+        print(f"auto-start: {prev!r} -> {target!r}{detail}")
         print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
     elif optout_changed:
         # Not "no change": the durable flag moved even though `when` already
         # matched — the state after a `/plugin update` restored the shipped
         # value while leaving the data-dir flag behind.
-        print(f"auto-start: {target!r}; saved setting updated")
+        print(f"auto-start: {target!r}; saved setting updated{detail}")
         # This is the post-/plugin-update shape, and the monitor CC started
         # for the current session has already exited on the stale opt-out —
         # so a reload is needed here just as much as on a `when` change.
         print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
-    elif manifest_ok and optout_ok:
+    elif not failed:
         print(f"auto-start: already {target!r}; no change")
     elif effective:
-        # One half failed while the other already matched. Name the half that
-        # actually carries the setting — inferring it from manifest_ok alone
-        # claimed "in effect via the saved setting" when the saved setting was
-        # exactly what had failed to write.
+        # Name the half that actually carries the setting. Deriving this from a
+        # single flag produced both mis-attributions this branch has had:
+        # "in effect via the saved setting" when that was the half that failed,
+        # and "neither could be written" when only one had.
         via = "the plugin manifest" if when_now == target else "the saved setting"
-        print(f"auto-start: {target!r} in effect via {via}; "
-              f"the other half could not be written (see stderr)")
+        print(f"auto-start: {target!r} in effect via {via}{detail}")
     else:
-        # Nothing landed. SKILL.md tells the agent to surface this output, so
-        # silence plus exit 1 would read as an unexplained failure.
-        print(f"auto-start: {target!r} NOT applied; neither the plugin "
-              f"manifest nor the saved setting could be written (see stderr)")
+        print(f"auto-start: {target!r} NOT applied{detail}")
 
     if not effective:
         print(f"auto-start: could not apply {target!r}", file=sys.stderr)

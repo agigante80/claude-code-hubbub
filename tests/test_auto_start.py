@@ -281,3 +281,60 @@ class TestPartialFailure:
         assert r.returncode == 0, r.stderr
         assert "no change" not in r.stdout
         assert not (data / "autostart-off").exists()
+
+
+class TestFailureReporting:
+    """SKILL.md tells the agent to surface this command's stdout, so a message
+    that mis-names which half failed is a message that sends the user to fix
+    the wrong thing. Both mis-attributions below shipped once."""
+
+    def test_names_only_the_half_that_failed(self, fake_plugin_root: Path, tmp_path: Path):
+        """Manifest unwritable, opt-out already correct. Reporting 'neither
+        could be written' was wrong — the saved setting was fine."""
+        monitors = fake_plugin_root / "monitors"
+        monitors.chmod(0o500)
+        try:
+            r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d")
+        finally:
+            monitors.chmod(0o700)
+        assert "NOT applied" in r.stdout, r.stdout
+        assert "the plugin manifest" in r.stdout
+        assert "the saved setting" not in r.stdout
+        assert r.returncode == 1
+
+    def test_credits_the_half_that_carries_the_setting(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """`off` holds through the manifest alone when the mirror can't be
+        written — but it must not claim the mirror is what carries it. The
+        fixture already ships LAZY, so `when` needs no write and the mirror is
+        the only half that moves."""
+        blocked = tmp_path / "blocked"
+        blocked.mkdir(mode=0o500)
+        try:
+            r = _run(["--off"], fake_plugin_root, data_dir=blocked / "d")
+        finally:
+            blocked.chmod(0o700)
+        assert "in effect via the plugin manifest" in r.stdout, r.stdout
+        assert "could not write the saved setting" in r.stdout
+        assert r.returncode == 0
+
+    def test_reports_when_nothing_landed(self, fake_plugin_root: Path, tmp_path: Path):
+        # `when` must differ from the target, or no manifest write is attempted
+        # and the manifest half cannot fail.
+        m = fake_plugin_root / "monitors" / "monitors.json"
+        entries = json.loads(m.read_text())
+        entries[0]["when"] = ALWAYS
+        m.write_text(json.dumps(entries, indent=2) + "\n")
+        monitors = fake_plugin_root / "monitors"
+        blocked = tmp_path / "blocked"
+        blocked.mkdir(mode=0o500)
+        monitors.chmod(0o500)
+        try:
+            r = _run(["--off"], fake_plugin_root, data_dir=blocked / "d")
+        finally:
+            monitors.chmod(0o700)
+            blocked.chmod(0o700)
+        assert "NOT applied" in r.stdout, r.stdout
+        assert "the plugin manifest" in r.stdout
+        assert "the saved setting" in r.stdout
+        assert r.returncode == 1
