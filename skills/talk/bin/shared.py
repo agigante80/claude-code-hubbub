@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import unicodedata
 from urllib.parse import quote
 from pathlib import Path
@@ -81,6 +82,9 @@ def env(key: str, default: str | None = None) -> str | None:
     return default
 
 
+MIGRATION_MARKER = ".migrated-from-inter-session"
+
+
 def legacy_data_dir() -> Path:
     return Path.home() / ".claude" / "data" / "inter-session"
 
@@ -114,17 +118,57 @@ def migrate_legacy_data_dir() -> None:
         return
     new = default_data_dir()
     legacy = legacy_data_dir()
+    if legacy.is_symlink():
+        return  # already migrated
     try:
-        if new.exists() or legacy.is_symlink() or not legacy.is_dir():
-            return
-        new.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(legacy, new)
-        legacy.symlink_to(new)
-    except OSError:
-        # Lost the race with a concurrent starter, or no permission to move.
-        # Either way a usable layout is already on disk; a failed tidy-up is
-        # never worth failing a connect over.
-        pass
+        if legacy.is_dir():
+            new.parent.mkdir(parents=True, exist_ok=True)
+            if not new.exists():
+                os.rename(legacy, new)
+            elif not _drain_into(legacy, new):
+                # Names collided, so both directories hold live state and
+                # neither can be discarded without guessing. Leave the disk
+                # exactly as found and say so.
+                _migration_warn(
+                    f"cannot merge {legacy} into {new}: both hold entries with "
+                    f"the same names. Old and new builds will use separate "
+                    f"tokens until this is resolved by hand."
+                )
+                return
+            else:
+                legacy.rmdir()
+            (new / MIGRATION_MARKER).touch()
+            legacy.symlink_to(new)
+        elif not legacy.exists() and (new / MIGRATION_MARKER).is_file():
+            # A previous run moved the directory but died — or lost a race —
+            # before creating the symlink. Without repair an older build finds
+            # no legacy path, recreates it as a real directory with its own
+            # token, and the namespace forks silently.
+            legacy.symlink_to(new)
+    except OSError as e:
+        _migration_warn(f"could not migrate {legacy} → {new}: {e}")
+
+
+def _drain_into(src: Path, dst: Path) -> bool:
+    """Move every entry of `src` into `dst`, returning False (having moved
+    nothing) if any name already exists there.
+
+    `dst` existing does not mean it holds state: `/hubbub:talk install-deps`
+    creates `<data-dir>/venv`, and on an upgrade where the runtime deps are
+    missing that happens *before* any entry-point has had a chance to migrate
+    — `client.py` exits on the missing dep first. Bailing out on "new exists"
+    would strand the token and pidfile in the legacy directory permanently.
+    """
+    entries = list(src.iterdir())
+    if any((dst / e.name).exists() for e in entries):
+        return False
+    for e in entries:
+        os.rename(e, dst / e.name)
+    return True
+
+
+def _migration_warn(msg: str) -> None:
+    print(f"[inter-session] data-dir migration: {msg}", file=sys.stderr)
 
 
 def data_dir() -> Path:

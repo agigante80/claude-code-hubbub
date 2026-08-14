@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 _DATA = Path.home() / ".claude" / "data"
 # Prefer the current location; fall back to the pre-rename one for installs
-# that have not yet been migrated by shared.data_dir().
+# no entry-point has migrated yet (shared.migrate_legacy_data_dir runs in
+# main(), which is after this).
 _VENV = _DATA / "hubbub" / "venv"
 if not (_VENV / "bin" / "python").is_file():
     _VENV = _DATA / "inter-session" / "venv"
@@ -29,7 +30,16 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-import websockets
+# Imported at module scope, so a missing dep must be caught *here* — a bare
+# `import websockets` would abort with a traceback before main() ever runs,
+# and the friendly "dependencies missing" line the skill tells the agent to
+# react to would never be printed.
+_MISSING_DEP: ImportError | None = None
+try:
+    import websockets
+except ImportError as _e:
+    websockets = None  # type: ignore[assignment]
+    _MISSING_DEP = _e
 
 from bin import shared, discover
 
@@ -145,13 +155,12 @@ def main() -> int:
     parser.add_argument("--self", action="store_true",
                         help="print only this session's status")
     args = parser.parse_args()
+    if _MISSING_DEP is not None:
+        print(f"dependencies missing — run /hubbub:talk install-deps ({_MISSING_DEP})",
+              file=sys.stderr)
+        return 1
     return asyncio.run(_run(args))
 
 
 if __name__ == "__main__":
-    try:
-        import websockets  # noqa: F401
-    except ImportError:
-        print("dependencies missing — run /hubbub:talk install-deps", file=sys.stderr)
-        sys.exit(1)
     sys.exit(main())

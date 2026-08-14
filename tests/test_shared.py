@@ -395,6 +395,51 @@ class TestLegacyDataDirMigration:
         assert self.legacy.is_symlink()
         assert self.legacy.resolve() == self.new
 
+    def test_migrates_when_install_deps_created_the_new_dir_first(self):
+        """On a deps-missing upgrade nothing migrates (client.py exits on the
+        import), then `install-deps` creates <new>/venv. A "new exists → bail"
+        guard would strand the token in the legacy dir forever."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "clients").mkdir()
+        (self.new / "venv" / "bin").mkdir(parents=True)
+        shared.migrate_legacy_data_dir()
+        assert (self.new / "token").read_text() == "live"
+        assert (self.new / "clients").is_dir()
+        assert (self.new / "venv" / "bin").is_dir()
+        assert self.legacy.is_symlink()
+
+    def test_name_collision_touches_nothing_and_warns(self, capsys):
+        """Both sides holding a `token` means state already forked. Guessing a
+        winner would silently destroy one session's bus; refuse instead."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("legacy-token")
+        self.new.mkdir(parents=True)
+        (self.new / "token").write_text("new-token")
+        shared.migrate_legacy_data_dir()
+        assert (self.legacy / "token").read_text() == "legacy-token"
+        assert (self.new / "token").read_text() == "new-token"
+        assert not self.legacy.is_symlink()
+        assert "cannot merge" in capsys.readouterr().err
+
+    def test_repairs_symlink_lost_after_a_partial_migration(self):
+        """rename() succeeded, symlink_to() didn't. Left alone, an older build
+        recreates the legacy path as a real dir with its own token."""
+        self.new.mkdir(parents=True)
+        (self.new / shared.MIGRATION_MARKER).touch()
+        (self.new / "token").write_text("live")
+        assert not self.legacy.exists()
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert (self.legacy / "token").read_text() == "live"
+
+    def test_fresh_install_gets_no_legacy_symlink(self):
+        """No marker means this machine never had an inter-session dir; don't
+        conjure one up just to have something to point at."""
+        self.new.mkdir(parents=True)
+        shared.migrate_legacy_data_dir()
+        assert not self.legacy.exists()
+
     def test_env_override_suppresses_migration(self, tmp_path, monkeypatch):
         """An explicit data dir means the caller owns the layout; don't go
         touching the legacy path behind its back."""
