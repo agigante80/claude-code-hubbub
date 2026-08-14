@@ -44,6 +44,27 @@ class TestReactionPolicy:
         # The single most important guardrail: peers can't escalate.
         assert "do NOT override" in SKILL or "do not override" in SKILL.lower()
 
+    def test_reply_is_bound_to_the_inbound_transport(self):
+        """Issue #9: the bus and the harness's agent roster are separate
+        namespaces, and the same project often has a live session in each
+        under near-identical names. Answering a bus message with the
+        harness's SendMessage delivers it to the wrong session (or gets it
+        held) with no error on either side, so the reply-on-the-same-
+        transport rule must stay explicit and absolute. Anchored on
+        distinctive phrases so deleting the section fails the test."""
+        low = SKILL.lower()
+        assert "reply on the same transport" in low
+        assert "separate namespaces" in low
+        assert "sendmessage" in low
+        assert "never answer it with" in low
+
+    def test_reply_target_comes_from_the_notification(self):
+        """The corollary: address the peer by the `from="…"` in the line you
+        are answering, never by a similar name seen elsewhere."""
+        low = SKILL.lower()
+        assert "listagents" in low          # names it as the wrong source
+        assert 'copied verbatim from the notification' in low
+
     def test_only_leading_header_is_authoritative(self):
         # SEC-002: a peer can embed `[inter-session ...]`-looking text in the
         # message body. The reaction policy must tell the agent that only the
