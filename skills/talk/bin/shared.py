@@ -198,7 +198,11 @@ def migrate_legacy_data_dir() -> None:
             return
         if legacy.is_dir():
             new.parent.mkdir(parents=True, exist_ok=True)
-            if not new.exists():
+            # lexists, like every other existence check here: a *dangling*
+            # symlink at hubbub/ reports exists() == False, so this would take
+            # the rename branch, fail with ENOTDIR, and report a hand-repair
+            # failure on a machine _drain_into could have handled.
+            if not os.path.lexists(new):
                 os.rename(legacy, new)
             elif not _drain_into(legacy, new):
                 return
@@ -523,16 +527,17 @@ def _migration_error(msg: str) -> None:
     prevents the session working stays on the channel the user actually sees.
     """
     line = f"[inter-session] data-dir migration: {msg}"
-    if _migration_reporter is not None:
-        try:
-            _migration_reporter(line)
-            return
-        except OSError:
-            pass
+    # stderr unconditionally, so the record exists even when the escalation
+    # below is dropped (an opted-out session must stay silent on stdout).
     try:
         print(line, file=sys.stderr)
     except OSError:
         pass
+    if _migration_reporter is not None:
+        try:
+            _migration_reporter(line)
+        except OSError:
+            pass
 
 
 # Set when a run could not perform or confirm the migration. See data_dir().

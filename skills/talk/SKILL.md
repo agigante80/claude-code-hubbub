@@ -334,6 +334,21 @@ Monitor(command="python3 <bin>/client.py --name <new-name>", ...)
 
 Find the monitor-task-id via `TaskList()`.
 
+**If `TaskList()` matches nothing, use the same fallback as `disconnect`** —
+with auto-start on (the default) the monitor was spawned by Claude Code
+from `monitors.json`, not by this skill, so it often isn't a task here:
+
+```
+Bash("python3 <bin>/list.py --self")                 # prints listener_pid=<pid>
+Bash("kill <pid>; sleep 1.5; python3 <bin>/list.py --self")
+```
+
+then re-run the `Monitor()` above with `<new-name>`. Skipping this is a
+silent failure: the new `Monitor()` finds the old one still holding the
+ppid lock, exits with `another monitor for this session is already
+running`, and the session keeps its old name while you report a rename.
+Confirm with `list.py --self` that `name=` is the new one.
+
 ## relabel — change the label in place (no reconnect)
 
 Unlike `rename`, changing the label does **not** require a reconnect — the
@@ -350,7 +365,14 @@ restart. Use `--label ''` to clear the label. Quote `<text>` the same way as
 
 ## status
 
-`Bash("python3 <bin>/list.py --self")` prints `name=…`, `session_id=…`, `port=…`.
+`Bash("python3 <bin>/list.py --self")`. Four possible outputs:
+
+| Output | Means |
+| :----- | :---- |
+| `name=… session_id=… listener_pid=… host=… port=…` | Connected. |
+| `not connected` / `not connected (stale state cleaned up)` | No monitor; nothing to do. |
+| `connecting (a listener holds the lock; its state file is stale, …)` | A monitor is starting, or retrying a server that is down. **Not** the same as "not connected" — don't kill the pid, it's stale. Re-check in a few seconds; if it persists, `TaskStop` the monitor or turn auto-start off. |
+| `not connected (stale state left in place)` | No live monitor, but the leftover state file couldn't be removed. Harmless; the next connect overwrites it. |
 
 ## disconnect
 
