@@ -67,11 +67,69 @@ class ErrorCode:
     UNKNOWN_OP = "unknown_op"
 
 
-def data_dir() -> Path:
-    env = os.environ.get("INTER_SESSION_DATA_DIR")
-    if env:
-        return Path(env)
+def env(key: str, default: str | None = None) -> str | None:
+    """Read `HUBBUB_<key>`, falling back to the pre-rename `INTER_SESSION_<key>`.
+
+    Both spellings are supported indefinitely: a user's shell profile or a
+    launcher may still export the old names, and silently ignoring them would
+    look like the override simply didn't work.
+    """
+    for prefix in ("HUBBUB_", "INTER_SESSION_"):
+        val = os.environ.get(prefix + key)
+        if val:
+            return val
+    return default
+
+
+def legacy_data_dir() -> Path:
     return Path.home() / ".claude" / "data" / "inter-session"
+
+
+def default_data_dir() -> Path:
+    return Path.home() / ".claude" / "data" / "hubbub"
+
+
+_migration_checked = False
+
+
+def _migrate_legacy_data_dir(new: Path) -> None:
+    """One-time `inter-session` → `hubbub` move, leaving a symlink behind.
+
+    The symlink is the whole point. Older builds hardcode the legacy path, and
+    on a machine mid-upgrade they must keep resolving to the *same* token,
+    election lock and pidfile as new builds. Split that namespace and two
+    clients each win their own election, both bind the port, and the loser's
+    `_unlink_own_identity` wipes the winner's pidfile — the exact race the
+    election flock exists to prevent (see CLAUDE.md).
+
+    `os.rename` is atomic within a filesystem and keeps inodes, so flocks held
+    by running clients survive it untouched.
+    """
+    global _migration_checked
+    if _migration_checked:
+        return
+    _migration_checked = True
+    legacy = legacy_data_dir()
+    try:
+        if new.exists() or legacy.is_symlink() or not legacy.is_dir():
+            return
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(legacy, new)
+        legacy.symlink_to(new)
+    except OSError:
+        # Lost the race with a concurrent starter, or no permission to move.
+        # Either way a usable layout is already on disk; a failed tidy-up is
+        # never worth failing a connect over.
+        pass
+
+
+def data_dir() -> Path:
+    override = env("DATA_DIR")
+    if override:
+        return Path(override)
+    new = default_data_dir()
+    _migrate_legacy_data_dir(new)
+    return new
 
 
 def server_log_path() -> Path:
@@ -567,11 +625,11 @@ def resolve_listener_key() -> int:
     (`send.py`/`list.py` readers) must compute this the same way.
 
     Resolution order:
-      1. `INTER_SESSION_PPID_OVERRIDE` (test/debug)
+      1. `HUBBUB_PPID_OVERRIDE` / `INTER_SESSION_PPID_OVERRIDE` (test/debug)
       2. The CC main process pid (production: a stable common ancestor)
       3. `os.getppid()` (fallback for non-CC environments)
     """
-    override = os.environ.get("INTER_SESSION_PPID_OVERRIDE")
+    override = env("PPID_OVERRIDE")
     if override:
         try:
             return int(override)

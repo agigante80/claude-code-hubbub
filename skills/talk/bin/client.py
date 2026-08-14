@@ -4,13 +4,19 @@ from __future__ import annotations
 
 # Bootstrap: re-exec under the project's isolated venv if it exists,
 # so we use isolated deps (websockets, psutil) rather than the user's
-# system/user-level Python. Tests opt out via INTER_SESSION_NO_REEXEC=1.
+# system/user-level Python. Tests opt out via HUBBUB_NO_REEXEC=1.
 import os
 import sys
 from pathlib import Path
-_VENV = Path.home() / ".claude" / "data" / "inter-session" / "venv"
+_DATA = Path.home() / ".claude" / "data"
+# Prefer the current location; fall back to the pre-rename one for installs
+# that have not yet been migrated by shared.data_dir().
+_VENV = _DATA / "hubbub" / "venv"
+if not (_VENV / "bin" / "python").is_file():
+    _VENV = _DATA / "inter-session" / "venv"
 _VENV_PY = _VENV / "bin" / "python"
-if (not os.environ.get("INTER_SESSION_NO_REEXEC")
+if (not (os.environ.get("HUBBUB_NO_REEXEC")
+         or os.environ.get("INTER_SESSION_NO_REEXEC"))
         and _VENV_PY.is_file()
         and Path(sys.prefix).resolve() != _VENV.resolve()):
     os.execv(str(_VENV_PY), [str(_VENV_PY), *sys.argv])
@@ -337,7 +343,7 @@ def _resolve_label(cli_label, env_label, cwd=None) -> str:
 
       1. `--label` given (cli_label is not None): validate, persist it for this
          project ('' clears the persisted label), and use it.
-      2. else `$INTER_SESSION_LABEL` (env_label truthy): validate and use as a
+      2. else `$HUBBUB_LABEL` (env_label truthy): validate and use as a
          one-off runtime override — NOT persisted.
       3. else: load the persisted per-project label (or '').
 
@@ -381,19 +387,21 @@ def main() -> int:
     # Resolution order for port / idle-shutdown:
     #   1. CLI arg (explicit override)
     #   2. CLAUDE_PLUGIN_OPTION_<KEY>  (set by CC when installed via /plugin install + userConfig)
-    #   3. INTER_SESSION_<KEY>         (manual env override)
+    #   3. HUBBUB_<KEY> / INTER_SESSION_<KEY>  (manual env override)
     #   4. Hard-coded default
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default=os.environ.get("INTER_SESSION_HOST", "127.0.0.1"))
+    parser.add_argument("--host", default=shared.env("HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=_env_int(
-        "CLAUDE_PLUGIN_OPTION_PORT", "INTER_SESSION_PORT", default=shared.DEFAULT_PORT,
+        "CLAUDE_PLUGIN_OPTION_PORT", "HUBBUB_PORT", "INTER_SESSION_PORT",
+        default=shared.DEFAULT_PORT,
     ))
-    parser.add_argument("--name", default=os.environ.get("INTER_SESSION_NAME", ""))
+    parser.add_argument("--name", default=shared.env("NAME", ""))
     # Default None (not "") so we can tell "flag absent" (→ load the persisted
     # per-project label) apart from an explicit "--label ''" (→ clear it).
     parser.add_argument("--label", default=None)
     parser.add_argument("--idle-shutdown-minutes", type=float, default=_env_float(
-        "CLAUDE_PLUGIN_OPTION_IDLE_SHUTDOWN_MINUTES", "INTER_SESSION_IDLE_MINUTES",
+        "CLAUDE_PLUGIN_OPTION_IDLE_SHUTDOWN_MINUTES", "HUBBUB_IDLE_MINUTES",
+        "INTER_SESSION_IDLE_MINUTES",
         default=10,
     ))
     parser.add_argument("--verbose", action="store_true")
@@ -408,13 +416,13 @@ def main() -> int:
         return 1
 
     try:
-        final_label = _resolve_label(args.label, os.environ.get("INTER_SESSION_LABEL"))
+        final_label = _resolve_label(args.label, shared.env("LABEL"))
     except ValueError as e:
         _print_line(f"[inter-session] invalid label {e.args[0]!r}")
         return 1
 
     # Plugin auto-start path: monitors.json doesn't pass --name (so the user
-    # doesn't have to set INTER_SESSION_NAME). Fall back to a name derived from
+    # doesn't have to set HUBBUB_NAME). Fall back to a name derived from
     # the cwd basename so the listener doesn't show as `(unnamed)`.
     final_name = args.name
     auto_named = False

@@ -29,8 +29,8 @@ plugin is now **`hubbub`** and its skill is **`talk`**, so the command is
 `/hubbub:talk` rather than `/inter-session:inter-session`.
 
 Nothing about the runtime moved: state still lives in
-`~/.claude/data/inter-session/`, the environment overrides are still
-`INTER_SESSION_PORT` / `INTER_SESSION_IDLE_MINUTES`, and notification
+`~/.claude/data/hubbub/`, the environment overrides are still
+`HUBBUB_PORT` / `HUBBUB_IDLE_MINUTES`, and notification
 lines still start with `[inter-session …]`. That split is deliberate —
 renaming the on-disk state or the line prefix would break sessions that
 are already connected under the old build, and those identifiers are
@@ -46,7 +46,7 @@ time. Two things are easy to get wrong:
    monitor still holds that session's lock, so the new one exits with
    `another monitor for this session is already running`. Stop the old
    monitor first (`TaskStop` its task, or `kill` the `listener_pid`
-   recorded in `~/.claude/data/inter-session/clients/<key>.session`),
+   recorded in `~/.claude/data/hubbub/clients/<key>.session`),
    then run `/hubbub:talk`.
 2. **`/plugin uninstall` does not remove the plugin's cache directory,
    and a session started before the uninstall keeps the old skill in
@@ -57,7 +57,7 @@ time. Two things are easy to get wrong:
    be certain which version is serving.
 
 To force the server itself to the new build, get to zero connected
-clients (or `kill` the pid in `~/.claude/data/inter-session/server.<port>.pid`)
+clients (or `kill` the pid in `~/.claude/data/hubbub/server.<port>.pid`)
 and let a new-path client elect a fresh one.
 
 ## About this fork
@@ -165,10 +165,12 @@ followed by `/plugin install inter-session` — that ships upstream's
 Claude handles runtime dependency install automatically on first use — no
 extra setup needed.
 
-By default the monitor starts **lazily** — it spins up the first time
-you invoke any `/hubbub:talk` command in a given Claude
-Code session. To switch to always-on auto-start at every session open,
-run `/hubbub:talk auto-start on` (then `/reload-plugins`).
+By default the monitor starts at **every session open**, so a session is
+reachable by its peers without anyone having to invoke anything in it
+first. If you would rather sessions opt in, `/hubbub:talk auto-start off`
+makes the monitor lazy — it then spins up the first time you invoke a
+`/hubbub:talk` command in that session. Either way, apply the change with
+`/reload-plugins`.
 
 ## Examples
 
@@ -329,7 +331,7 @@ collaboration.
 | `/hubbub:talk relabel <text>`                  | Change this session's label in place (no reconnect); `""` clears. Persists per project. |
 | `/hubbub:talk status`                          | Heuristic connection state.                                    |
 | `/hubbub:talk disconnect`                      | Stop the monitor.                                              |
-| `/hubbub:talk auto-start [on\|off\|status]`    | Toggle auto-start. `on` = start at every session; `off` = lazy (default). Apply with `/reload-plugins`. |
+| `/hubbub:talk auto-start [on\|off\|status]`    | Toggle auto-start. `on` = start at every session (default); `off` = lazy. Apply with `/reload-plugins`. |
 
 ## Session labels
 
@@ -345,7 +347,7 @@ it is reused automatically on the next restart without re-passing the flag:
 
 - `--label "…"` — set and persist for this project.
 - `--label ""` — clear the persisted label.
-- `INTER_SESSION_LABEL` — a one-off runtime override; used but **not**
+- `HUBBUB_LABEL` — a one-off runtime override; used but **not**
   persisted.
 
 To change the label of an already-connected session **without reconnecting**
@@ -369,7 +371,7 @@ The WebSocket port and idle-shutdown timeout are configurable via
 ## Security
 
 - Server binds `127.0.0.1` only.
-- Bearer token at `~/.claude/data/inter-session/token` (mode `0600`,
+- Bearer token at `~/.claude/data/hubbub/token` (mode `0600`,
   directory `0700`).
 - Any process running as the same Unix user can read the token and
   connect. This is acceptable for single-user, single-machine.
@@ -413,7 +415,7 @@ real-world failures that motivated the rule.
 - Stdout notification body: 400 chars (Claude Code clips monitor
   notifications at ~512 chars total; the cap leaves room for our
   prefix). Above this, the receiver sees a truncated first line plus
-  a `cont` pointer line to `~/.claude/data/inter-session/messages.log`,
+  a `cont` pointer line to `~/.claude/data/hubbub/messages.log`,
   where the full payload is always preserved.
 - `messages.log` rotates at 50 MB, keeping 5 backups
   (`messages.log.1` … `messages.log.5`), so retrieval of an older

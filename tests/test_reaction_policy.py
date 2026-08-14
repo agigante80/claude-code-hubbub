@@ -105,9 +105,9 @@ class TestReactionPolicy:
 class TestInstallDepsUx:
     def test_uses_isolated_venv_by_default(self):
         """install-deps must default to a project-local venv at
-        ~/.claude/data/inter-session/venv so it never touches the user's
+        ~/.claude/data/hubbub/venv so it never touches the user's
         system or user-level Python."""
-        assert "~/.claude/data/inter-session/venv" in SKILL
+        assert "~/.claude/data/hubbub/venv" in SKILL
         assert "python3 -m venv" in SKILL or "uv venv" in SKILL
 
     def test_offers_uv_as_optional(self):

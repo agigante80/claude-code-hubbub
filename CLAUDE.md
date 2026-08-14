@@ -21,8 +21,8 @@ Two install modes, **both supported and tested**:
   all live inside `skills/talk/`, so a copy or symlink of just
   that subdirectory is a fully working skill. User invokes as
   `/hubbub:talk …` (no plugin namespace). No `userConfig`; override
-  defaults via `INTER_SESSION_PORT` / `INTER_SESSION_IDLE_MINUTES` env
-  vars if needed.
+  defaults via `HUBBUB_PORT` / `HUBBUB_IDLE_MINUTES` env vars if
+  needed.
 
 The skill content (`skills/talk/SKILL.md`) is install-mode
 agnostic: the connect step has **no upfront dedup check**. It picks a
@@ -41,9 +41,9 @@ Layout follows the conventional `skills/<name>/SKILL.md` auto-discovery
 pattern that the current CC plugin schema requires (`"skills": ["./"]`
 is rejected with "Path escapes plugin directory"). **`bin/` lives
 inside the skill dir** (`skills/talk/bin/`). The plugin's
-monitor `when` defaults to `on-skill-invoke:talk` (lazy);
-`bin/auto_start.py` flips it to `always` when the user runs
-`/hubbub:talk auto-start on`. Empirically `on-skill-invoke` may not
+monitor `when` defaults to `always` (every session joins the bus at
+open); `bin/auto_start.py` flips it to `on-skill-invoke:talk` when the
+user runs `/hubbub:talk auto-start off`. Empirically `on-skill-invoke` may not
 reliably auto-spawn a working monitor in current CC versions, so the
 LLM's `Monitor()` call in the skill is what actually establishes the
 connection most of the time.
@@ -137,16 +137,33 @@ The project was `inter-session` through `0.1.4`; the plugin is now
 renamed, runtime identifiers were not**, and that asymmetry is
 intentional:
 
-| Renamed | Left as `inter-session` |
-| :------ | :---------------------- |
-| plugin + marketplace `name`, repo/docs, `skills/talk/`, `monitors.json` (`hubbub-client`, `on-skill-invoke:talk`, description `hubbub messages`) | `~/.claude/data/inter-session/` (token, pidfile, `messages.log`, `clients/*`), `INTER_SESSION_*` env vars, the `[inter-session …]` stdout prefix |
+| Renamed | Renamed, with a compatibility shim | Still `inter-session` |
+| :------ | :--------------------------------- | :-------------------- |
+| plugin + marketplace `name`, repo/docs, `skills/talk/`, `monitors.json` (`hubbub-client`, description `hubbub messages`) | `~/.claude/data/hubbub/` (`0.2.0`; legacy path left as a symlink), `HUBBUB_*` env vars (`INTER_SESSION_*` still honoured) | the `[inter-session …]` stdout prefix |
 
-Renaming the data dir would strand the state of every already-connected
-session; renaming the stdout prefix would break the reaction policy for
-any peer still running an older build, since the prefix is the wire
-contract between monitor and skill. Migrate them separately, with a
-compatibility window, or not at all — but don't "finish the rename" in
-one sweep and assume it's cosmetic.
+The stdout prefix is the last piece, and it is deliberately still
+outstanding — see issue #10. It is the wire contract between `client.py`
+and the reaction policy in `SKILL.md`, so changing it means teaching the
+policy to accept both spellings for a release before the emitter moves.
+Don't "finish the rename" in one sweep and assume it's cosmetic.
+
+#### The data-dir migration is a rename **plus a symlink**, and the symlink is the load-bearing half
+
+`shared._migrate_legacy_data_dir` does `os.rename(inter-session, hubbub)`
+and then recreates `inter-session` as a symlink to `hubbub`. Don't drop
+the symlink as tidy-up. Older builds on the same machine hardcode the
+legacy path, and they must keep resolving to the *same* token, election
+lock and pidfile as new builds — split that namespace and two clients
+each win their own election, both bind the port, and the loser's
+`_unlink_own_identity` wipes the winner's identity. That is precisely the
+race the election flock exists to prevent, re-entered through the back
+door (see the election invariant below).
+
+`os.rename` is used rather than copy-then-delete because it is atomic
+within a filesystem and preserves inodes, so flocks already held by
+running monitors survive the move — a session connected before the
+upgrade keeps contending with one connected after it. Covered by
+`tests/test_shared.py::TestLegacyDataDirMigration`.
 
 ### Server election (`bin/spawn.py` + `bin/server.py --fd`)
 
@@ -200,7 +217,7 @@ receiving the token.
 ### Two venvs, and every entry-point re-execs into one of them
 
 - `.venv` at the repo root — **dev/test only**, created by the Makefile.
-- `~/.claude/data/inter-session/venv` — the **user's runtime venv**,
+- `~/.claude/data/hubbub/venv` — the **user's runtime venv**,
   created by `/hubbub:talk install-deps`, holding websockets + psutil.
 
 The first ~10 lines of `client.py`, `send.py`, and `list.py` are a
@@ -209,7 +226,7 @@ interpreter whenever that venv exists. So `python3 bin/client.py`
 does not necessarily run under the interpreter you invoked it with —
 if you're hand-testing an edit and the runtime venv is stale, you are
 debugging the wrong dependencies. `tests/conftest.py` sets
-`INTER_SESSION_NO_REEXEC=1` process-wide to disable it; set the same
+`HUBBUB_NO_REEXEC=1` process-wide to disable it; set the same
 env var for any manual repro.
 
 ### State files are keyed by the Claude Code *ancestor* pid, not `getppid()`
@@ -235,7 +252,7 @@ Two traps live in that walk:
   `claude daemon run` supervisor — at which point every background
   session collides on one lock. This is what commits `689b636`/`7b87015`
   fixed; `resolve_listener_key` is also overridable via
-  `INTER_SESSION_PPID_OVERRIDE` (tests, debugging).
+  `HUBBUB_PPID_OVERRIDE` (tests, debugging).
 
 ### `${CLAUDE_PLUGIN_ROOT}` is not exported to `Bash()`/`Monitor()` shells
 
@@ -340,13 +357,13 @@ prose so prose edits can't accidentally drop a guardrail.
 ## Test conventions
 
 - **State isolation**: the `tmp_data_dir` fixture sets
-  `INTER_SESSION_DATA_DIR` to a per-test temp path so the suite never
-  touches `~/.claude/data/inter-session/`.
+  `HUBBUB_DATA_DIR` to a per-test temp path so the suite never
+  touches `~/.claude/data/hubbub/`.
 - **Free ports**: the `free_port` fixture binds port `0` to find an
   ephemeral port.
 - **PPID override**: subprocesses spawned in a single test share the
   pytest parent pid, which would collide on the ppid flock. Set
-  `INTER_SESSION_PPID_OVERRIDE` to give each subprocess a distinct
+  `HUBBUB_PPID_OVERRIDE` to give each subprocess a distinct
   pseudo-ppid.
 - **Slow tests** (`@pytest.mark.slow`): subprocess-spawning, >1 s.
 
@@ -355,7 +372,7 @@ prose so prose edits can't accidentally drop a guardrail.
 - **Don't blanket `pkill -f 'bin/(client|server).py'`** during local
   testing — it will kill real user hubbub monitors running in
   other CC sessions. Target specific pids via the pidfile
-  (`~/.claude/data/inter-session/server.<port>.pid`) or
+  (`~/.claude/data/hubbub/server.<port>.pid`) or
   `TaskList()`-derived monitor task IDs.
 - **Don't use `${user_config.*}` substitution in `monitors.json`** —
   see invariant above.

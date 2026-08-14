@@ -8,9 +8,15 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-_VENV = Path.home() / ".claude" / "data" / "inter-session" / "venv"
+_DATA = Path.home() / ".claude" / "data"
+# Prefer the current location; fall back to the pre-rename one for installs
+# that have not yet been migrated by shared.data_dir().
+_VENV = _DATA / "hubbub" / "venv"
+if not (_VENV / "bin" / "python").is_file():
+    _VENV = _DATA / "inter-session" / "venv"
 _VENV_PY = _VENV / "bin" / "python"
-if (not os.environ.get("INTER_SESSION_NO_REEXEC")
+if (not (os.environ.get("HUBBUB_NO_REEXEC")
+         or os.environ.get("INTER_SESSION_NO_REEXEC"))
         and _VENV_PY.is_file()
         and Path(sys.prefix).resolve() != _VENV.resolve()):
     os.execv(str(_VENV_PY), [str(_VENV_PY), *sys.argv])
