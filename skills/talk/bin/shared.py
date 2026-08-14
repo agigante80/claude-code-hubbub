@@ -553,8 +553,20 @@ def _still_on_legacy(legacy: Path, new: Path) -> bool:
     its own, which `_link_legacy` warns about. Answering by directory type sent
     such a run back to read the *other* build's token and orphan its own.
     """
-    return (legacy.is_dir() and not legacy.is_symlink()
-            and not (new / MIGRATION_MARKER).is_file())
+    if (new / MIGRATION_MARKER).is_file():
+        return False  # we completed the move; our state is under `new`
+    if legacy.is_symlink():
+        # A symlink pointing somewhere *other* than the data dir — a user who
+        # relocated their state under 0.1.x. The migration refuses to touch it
+        # ("leaving it alone"), and answering False here made that refusal do
+        # the opposite of what it says: data_dir() returned `hubbub/`,
+        # ensure_token() minted a fresh token there, and every connected peer
+        # started getting `unauthorized`. The live token is behind the link.
+        try:
+            return legacy.resolve() != new.resolve()
+        except OSError:
+            return True
+    return legacy.is_dir()
 
 
 def _note_unmigrated(legacy: Path, new: Path) -> None:
@@ -650,6 +662,20 @@ def clients_dir() -> Path:
 
 def client_lock_path(ppid: int) -> Path:
     return clients_dir() / f"{ppid}.lock"
+
+
+def lock_path_for_session_file(session_path: Path) -> Path:
+    """`clients/<key>.session` → `clients/<key>.lock`.
+
+    Third copy of this convention was drifting into `list.py`. If the naming
+    ever changes, a stale copy makes `listener_lock_held` open a file that is
+    not there, report "not held", and have every connected session report
+    `not connected (stale state cleaned up)` — with the state file deleted.
+    """
+    name = session_path.name
+    if name.endswith(".session"):
+        name = name[: -len(".session")]
+    return session_path.with_name(name + ".lock")
 
 
 def client_session_path(ppid: int) -> Path:
@@ -894,7 +920,11 @@ def safe_pid_alive(pid: int) -> bool:
     """
     try:
         pid = int(pid)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError is the one that gets missed: json.loads turns `1e400`
+        # into float('inf'), and int(inf) raises it — an ArithmeticError, so
+        # neither a ValueError guard nor the OSError guard around os.kill
+        # catches it.
         return False
     if pid <= 0:
         return False

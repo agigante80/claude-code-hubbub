@@ -82,8 +82,7 @@ async def _run(args) -> int:
         # a reused pid — or another session's monitor — for ours. That matters
         # because the pid printed below is what the disconnect flow tells an
         # agent to kill.
-        lock_path = state_path.with_name(
-            state_path.name[: -len(".session")] + ".lock")
+        lock_path = shared.lock_path_for_session_file(state_path)
         # Both signals, pid first. The flock proves *a* monitor holds this
         # session's lock but not that it wrote this state file: a respawned
         # monitor takes the lock in run() and writes state only after the
@@ -91,12 +90,11 @@ async def _run(args) -> int:
         # file still names the previous, dead pid — which is the pid the
         # disconnect flow would tell an agent to kill. Checking the pid first
         # also keeps the flock probe off the path when it is already answered.
-        try:
-            pid_alive = shared.safe_pid_alive(int(listener_pid))
-        except (TypeError, ValueError):
-            # Hand-edited or foreign state file. `--self` is what the
-            # disconnect flow runs, so a traceback here would break it.
-            pid_alive = False
+        # No int() here: safe_pid_alive does the conversion and swallows
+        # everything a hand-edited or foreign state file can put in the field,
+        # including the float('inf') that json.loads makes of `1e400`. Guarding
+        # at the call site left the *other* call site below unguarded.
+        pid_alive = shared.safe_pid_alive(listener_pid)
         if not (pid_alive and shared.listener_lock_held(lock_path)):
             # No live listener. TOCTOU-safe cleanup — unlink_if_matches
             # re-checks under the same flock and refuses if one reappeared.
