@@ -173,17 +173,26 @@ inherits the real `$HOME`. A path resolver that touches the filesystem
 defeats the suite's whole isolation story.
 `test_data_dir_has_no_filesystem_side_effects` guards it.
 
-**`hubbub/` already existing does not mean the migration is done.** The guard
-is `legacy.is_symlink()`, not `new.exists()`. On a deps-missing upgrade
-`client.py` dies at its module-level `import websockets` before `main()` — so
-nothing migrates — and the user's next move is `install-deps`, which creates
-`<data-dir>/venv` and thereby the new directory. A "new exists → bail" check
-would then be permanently stuck, stranding the live token and pidfile under
-`inter-session/` with no symlink: exactly the forked namespace the symlink
-exists to prevent, with no self-repair path. `_drain_into` moves the entries
-across instead, and refuses (loudly, changing nothing) if any name collides —
-a collision means state has already forked and picking a winner would destroy
-one side's bus.
+**`hubbub/` already existing does not mean the migration is done, and a
+colliding `venv` is not a conflict.** The guard is `legacy.is_symlink()`, not
+`new.exists()`. `install-deps` is a documented standalone command that creates
+`<data-dir>/venv` at the *new* path, so a user upgrading from a pre-rename
+install can easily produce `hubbub/venv` before any monitor has migrated
+anything — while that install's own `inter-session/venv` still sits there.
+Bail on "new exists" and the migration is permanently stuck; treat two `venv`
+entries as a collision and it refuses on *every* machine that ever ran
+`install-deps`, which is most of them. Both failures strand the live token and
+pidfile under `inter-session/` with no symlink — the forked namespace the
+symlink exists to prevent, with no self-repair path.
+
+So `_drain_into` moves entries across, treats only `_DISPOSABLE` names
+(`venv`, the marker) as safely set-aside-able, and refuses — loudly, changing
+nothing — when *live* state collides. A colliding token means the fork already
+happened and picking a winner would silently destroy one side's bus. If the
+legacy directory can't be emptied (an old build still running may recreate
+`clients/` mid-move), the remainder is renamed to `inter-session.pre-rename`
+rather than left in place: a legacy path that stays a real directory is the
+one outcome that guarantees the fork.
 
 A `.migrated-from-inter-session` marker in the new dir lets a later run
 recreate the symlink if a previous one moved the directory but died before

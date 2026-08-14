@@ -396,10 +396,10 @@ class TestLegacyDataDirMigration:
         assert self.legacy.resolve() == self.new
 
     def test_migrates_when_install_deps_created_the_new_dir_first(self):
+        self.legacy.mkdir(parents=True)
         """On a deps-missing upgrade nothing migrates (client.py exits on the
         import), then `install-deps` creates <new>/venv. A "new exists → bail"
         guard would strand the token in the legacy dir forever."""
-        self.legacy.mkdir(parents=True)
         (self.legacy / "token").write_text("live")
         (self.legacy / "clients").mkdir()
         (self.new / "venv" / "bin").mkdir(parents=True)
@@ -408,19 +408,6 @@ class TestLegacyDataDirMigration:
         assert (self.new / "clients").is_dir()
         assert (self.new / "venv" / "bin").is_dir()
         assert self.legacy.is_symlink()
-
-    def test_name_collision_touches_nothing_and_warns(self, capsys):
-        """Both sides holding a `token` means state already forked. Guessing a
-        winner would silently destroy one session's bus; refuse instead."""
-        self.legacy.mkdir(parents=True)
-        (self.legacy / "token").write_text("legacy-token")
-        self.new.mkdir(parents=True)
-        (self.new / "token").write_text("new-token")
-        shared.migrate_legacy_data_dir()
-        assert (self.legacy / "token").read_text() == "legacy-token"
-        assert (self.new / "token").read_text() == "new-token"
-        assert not self.legacy.is_symlink()
-        assert "cannot merge" in capsys.readouterr().err
 
     def test_repairs_symlink_lost_after_a_partial_migration(self):
         """rename() succeeded, symlink_to() didn't. Left alone, an older build
@@ -440,11 +427,97 @@ class TestLegacyDataDirMigration:
         shared.migrate_legacy_data_dir()
         assert not self.legacy.exists()
 
+    def test_colliding_venv_does_not_block_the_migration(self, capsys):
+        """The regression that mattered: EVERY pre-rename install that ever ran
+        install-deps has inter-session/venv, and install-deps on the new build
+        creates hubbub/venv. Treating that pair as a conflict refused the
+        migration on exactly the machines it exists for."""
+        (self.legacy / "venv" / "bin").mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "clients").mkdir()
+        (self.new / "venv" / "bin").mkdir(parents=True)
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert (self.new / "token").read_text() == "live"
+        assert (self.new / "clients").is_dir()
+        # The new venv is the one the bootstrap will find; the stale one is
+        # set aside rather than deleted.
+        assert (self.new / "venv" / "bin").is_dir()
+        aside = self.legacy.with_name("inter-session.pre-rename")
+        assert (aside / "venv").is_dir()
+        assert "can be deleted" in capsys.readouterr().err
+
+    def test_symlink_still_lands_when_legacy_is_repopulated_mid_move(self, monkeypatch):
+        """An old build still running can recreate clients/ between the scan
+        and the rmdir. Leaving `legacy` a real directory is the one outcome
+        that forks the namespace, so the remainder gets set aside instead."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        self.new.mkdir(parents=True)
+        real_rename = os.rename
+        state = {"done": False}
+
+        def racing_rename(src, dst):
+            real_rename(src, dst)
+            if not state["done"]:
+                state["done"] = True
+                (self.legacy / "clients").mkdir()  # the old monitor comes back
+
+        monkeypatch.setattr(shared.os, "rename", racing_rename)
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert (self.new / "token").read_text() == "live"
+
+    def test_backfills_marker_for_installs_migrated_before_it_existed(self):
+        """0.2.0's first cut symlinked without writing a marker. Those installs
+        would return here forever, so a later lost symlink could never be
+        repaired."""
+        self.new.mkdir(parents=True)
+        self.legacy.symlink_to(self.new)
+        assert not (self.new / shared.MIGRATION_MARKER).exists()
+        shared.migrate_legacy_data_dir()
+        assert (self.new / shared.MIGRATION_MARKER).is_file()
+
+    def test_foreign_symlink_is_left_alone(self, tmp_path, capsys):
+        elsewhere = tmp_path / "somewhere-else"
+        elsewhere.mkdir()
+        self.legacy.parent.mkdir(parents=True, exist_ok=True)
+        self.legacy.symlink_to(elsewhere)
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.resolve() == elsewhere.resolve()
+        assert not (self.new / shared.MIGRATION_MARKER).exists()
+        assert "leaving it alone" in capsys.readouterr().err
+
+    def test_losing_the_race_is_silent(self, monkeypatch, capsys):
+        """Concurrent starts are normal (a monitor and a list.py). Losing the
+        race is the expected shape, not a failure to announce."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+
+        def vanish(*a, **k):
+            raise FileNotFoundError(2, "No such file or directory")
+
+        monkeypatch.setattr(shared.os, "rename", vanish)
+        shared.migrate_legacy_data_dir()
+        assert capsys.readouterr().err == ""
+
+    def test_live_state_collision_still_refuses(self, capsys):
+        """Two real tokens means the fork already happened; picking a winner
+        would destroy one side's bus."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("legacy-token")
+        self.new.mkdir(parents=True)
+        (self.new / "token").write_text("new-token")
+        shared.migrate_legacy_data_dir()
+        assert (self.legacy / "token").read_text() == "legacy-token"
+        assert (self.new / "token").read_text() == "new-token"
+        assert not self.legacy.is_symlink()
+        assert "cannot merge" in capsys.readouterr().err
+
     def test_env_override_suppresses_migration(self, tmp_path, monkeypatch):
         """An explicit data dir means the caller owns the layout; don't go
         touching the legacy path behind its back."""
         monkeypatch.setenv("HUBBUB_DATA_DIR", str(tmp_path / "explicit"))
-        self.legacy.mkdir(parents=True)
         shared.migrate_legacy_data_dir()
         assert not self.legacy.is_symlink()
         assert not self.new.exists()
