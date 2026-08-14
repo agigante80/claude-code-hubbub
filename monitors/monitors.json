@@ -3,6 +3,6 @@
     "name": "hubbub-client",
     "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/talk/bin/client.py",
     "description": "hubbub messages",
-    "when": "on-skill-invoke:talk"
+    "when": "always"
   }
 ]

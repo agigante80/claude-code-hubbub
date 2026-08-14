@@ -10,7 +10,7 @@
       "name": "hubbub",
       "description": "Agent-to-agent messaging for Claude Code sessions on the same machine. Maintained fork of yilunzhang/claude-code-inter-session.",
       "source": "./",
-      "version": "0.1.5",
+      "version": "0.2.0",
       "category": "productivity",
       "tags": ["messaging", "agents", "automation"],
       "homepage": "https://github.com/agigante80/claude-code-hubbub",

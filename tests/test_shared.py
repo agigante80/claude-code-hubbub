@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import stat
@@ -295,10 +296,105 @@ class TestPaths:
         path = shared.data_dir()
         assert path == tmp_path / "x"
 
-    def test_default_data_dir(self, monkeypatch):
+    def test_data_dir_respects_new_env_name(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HUBBUB_DATA_DIR", str(tmp_path / "new"))
+        assert shared.data_dir() == tmp_path / "new"
+
+    def test_new_env_name_wins_over_legacy(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HUBBUB_DATA_DIR", str(tmp_path / "new"))
+        monkeypatch.setenv("INTER_SESSION_DATA_DIR", str(tmp_path / "old"))
+        assert shared.data_dir() == tmp_path / "new"
+
+    def test_default_data_dir(self, tmp_path, monkeypatch):
         monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(shared, "_migration_checked", False)
         path = shared.data_dir()
-        assert str(path).endswith(".claude/data/inter-session")
+        assert str(path).endswith(".claude/data/hubbub")
+
+
+class TestLegacyDataDirMigration:
+    """`inter-session` → `hubbub` must move the directory *and* leave a symlink,
+    so older builds still running on this machine keep resolving to the same
+    token / election lock / pidfile instead of forking the namespace."""
+
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(shared, "_migration_checked", False)
+        self.legacy = tmp_path / ".claude" / "data" / "inter-session"
+        self.new = tmp_path / ".claude" / "data" / "hubbub"
+
+    def test_migrates_and_leaves_symlink(self):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("secret")
+        assert shared.data_dir() == self.new
+        assert (self.new / "token").read_text() == "secret"
+        assert self.legacy.is_symlink()
+        # An older build reading the hardcoded legacy path sees the same file.
+        assert (self.legacy / "token").read_text() == "secret"
+
+    def test_running_client_keeps_its_flock(self):
+        """A held flock survives the move: `os.rename` keeps the inode, so a
+        pre-migration monitor and a post-migration one still contend."""
+        self.legacy.mkdir(parents=True)
+        lock = self.legacy / "9473.election.lock"
+        lock.touch()
+        held = open(lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            shared.data_dir()
+            contender = open(self.new / "9473.election.lock", "w")
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                contender.close()
+        finally:
+            held.close()
+
+    def test_noop_when_already_migrated(self):
+        self.new.mkdir(parents=True)
+        (self.new / "token").write_text("current")
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("stale")
+        assert shared.data_dir() == self.new
+        assert (self.new / "token").read_text() == "current"
+        # Legacy left exactly as found — never clobbered, never deleted.
+        assert not self.legacy.is_symlink()
+        assert (self.legacy / "token").read_text() == "stale"
+
+    def test_noop_on_fresh_install(self):
+        assert shared.data_dir() == self.new
+        assert not self.legacy.exists()
+
+    def test_second_call_does_not_re_migrate(self):
+        self.legacy.mkdir(parents=True)
+        shared.data_dir()
+        assert self.legacy.is_symlink()
+        # Symlink present: a re-check must not try to rename it onto itself.
+        assert shared.data_dir() == self.new
+        assert self.legacy.is_symlink()
+
+
+class TestEnvAliases:
+    def test_prefers_new_prefix(self, monkeypatch):
+        monkeypatch.setenv("HUBBUB_PORT", "1111")
+        monkeypatch.setenv("INTER_SESSION_PORT", "2222")
+        assert shared.env("PORT") == "1111"
+
+    def test_falls_back_to_legacy_prefix(self, monkeypatch):
+        monkeypatch.delenv("HUBBUB_PORT", raising=False)
+        monkeypatch.setenv("INTER_SESSION_PORT", "2222")
+        assert shared.env("PORT") == "2222"
+
+    def test_default_when_neither_set(self, monkeypatch):
+        monkeypatch.delenv("HUBBUB_PORT", raising=False)
+        monkeypatch.delenv("INTER_SESSION_PORT", raising=False)
+        assert shared.env("PORT", "9473") == "9473"
 
 
 class TestResolveListenerKey:

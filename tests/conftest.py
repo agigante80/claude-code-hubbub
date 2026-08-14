@@ -13,15 +13,18 @@ sys.path.insert(0, str(SKILL_DIR))
 
 # Tests run with the dev environment's Python (which has websockets/psutil
 # installed via requirements-dev.txt). Disable the entry-point bootstrap
-# that would re-exec under ~/.claude/data/inter-session/venv if one
-# exists — that venv is for the user's runtime, not for tests.
-os.environ["INTER_SESSION_NO_REEXEC"] = "1"
+# that would re-exec under ~/.claude/data/hubbub/venv if one exists —
+# that venv is for the user's runtime, not for tests.
+os.environ["HUBBUB_NO_REEXEC"] = "1"
 
 
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
-    d = tmp_path / "inter-session"
-    monkeypatch.setenv("INTER_SESSION_DATA_DIR", str(d))
+    d = tmp_path / "hubbub"
+    monkeypatch.setenv("HUBBUB_DATA_DIR", str(d))
+    # Legacy spelling stays cleared so a stray export in the developer's
+    # shell can't leak a real data dir into a test.
+    monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
     return d
 
 

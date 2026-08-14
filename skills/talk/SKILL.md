@@ -215,7 +215,8 @@ Works the same whether the skill is installed as part of the plugin
    2. `CLAUDE_PLUGIN_OPTION_PORT` / `CLAUDE_PLUGIN_OPTION_IDLE_SHUTDOWN_MINUTES`
       — CC injects these from the plugin's `userConfig` (plugin install
       only; standalone-skill installs have no userConfig)
-   3. `INTER_SESSION_PORT` / `INTER_SESSION_IDLE_MINUTES` (manual override)
+   3. `HUBBUB_PORT` / `HUBBUB_IDLE_MINUTES` (manual override; the
+      pre-rename `INTER_SESSION_*` spellings are still honoured)
    4. Defaults: `9473`, `10` minutes
 
    Passing them as CLI args silently nullifies the user's plugin config,
@@ -263,7 +264,7 @@ then re-run `/hubbub:talk connect`.
 ## install-deps — install runtime deps into an isolated venv
 
 Inter-session keeps its Python deps in a dedicated venv at
-`~/.claude/data/inter-session/venv` so it never touches the user's
+`~/.claude/data/hubbub/venv` so it never touches the user's
 system or user-level Python. Once the venv exists, every `bin/*.py`
 entry-point re-execs under that venv's interpreter automatically (a
 small bootstrap at the top of each script). The user doesn't need to
@@ -275,13 +276,13 @@ configure anything else.
 2. **Print the exact commands you're about to run, then ask the user
    to confirm** before executing.
 3. **Create the venv** if it doesn't already exist:
-   - With uv: `uv venv ~/.claude/data/inter-session/venv`
-   - Without uv: `python3 -m venv ~/.claude/data/inter-session/venv`
+   - With uv: `uv venv ~/.claude/data/hubbub/venv`
+   - Without uv: `python3 -m venv ~/.claude/data/hubbub/venv`
 4. **Install runtime deps into the venv**:
-   - With uv: `uv pip install -p ~/.claude/data/inter-session/venv -r <bin>/../requirements.txt`
-   - Without uv: `~/.claude/data/inter-session/venv/bin/pip install -r <bin>/../requirements.txt`
+   - With uv: `uv pip install -p ~/.claude/data/hubbub/venv -r <bin>/../requirements.txt`
+   - Without uv: `~/.claude/data/hubbub/venv/bin/pip install -r <bin>/../requirements.txt`
 5. **Tell the user**: "Installed in isolated venv at
-   `~/.claude/data/inter-session/venv`. Future `/hubbub:talk` commands
+   `~/.claude/data/hubbub/venv`. Future `/hubbub:talk` commands
    will pick it up automatically."
 
 ### Why isolated?
@@ -290,7 +291,7 @@ configure anything else.
 - Doesn't conflict with the user's other projects' websockets/psutil
   versions.
 - Survives Python upgrades cleanly — just `rm -rf
-  ~/.claude/data/inter-session/venv` to reset.
+  ~/.claude/data/hubbub/venv` to reset.
 - Sidesteps PEP 668's `externally-managed-environment` guard
   (Homebrew / system Python / recent Debian/Ubuntu).
 
@@ -366,8 +367,13 @@ surface this to the user after running.
 
 `on` = `when: "always"` (start at every session open).
 `off` = `when: "on-skill-invoke:talk"` (lazy: starts when the
-user first invokes any `/hubbub:talk` command in a session). The
-default for fresh installs is `off` (lazy).
+user first invokes any `/hubbub:talk` command in a session).
+
+**The default for fresh installs is `on`.** A session that hasn't joined
+the bus can't be reached by a peer, and with lazy start it only joined
+once its *own* user invoked the skill — backwards for a system whose
+point is being driven from another session. Turn it off with
+`/hubbub:talk auto-start off` if you'd rather sessions opt in.
 
 ## Truncated messages
 
@@ -376,14 +382,14 @@ two lines:
 
 ```
 [inter-session msg=q7r8 from="data-pipe" truncated=2097152] <first ~400 chars of text>
-[inter-session msg=q7r8 cont] full text 2.0 MB at ~/.claude/data/inter-session/messages.log
+[inter-session msg=q7r8 cont] full text 2.0 MB at ~/.claude/data/hubbub/messages.log
 ```
 
-The full payload is in `~/.claude/data/inter-session/messages.log` as a
+The full payload is in `~/.claude/data/hubbub/messages.log` as a
 JSONL record. Fetch it with:
 
 ```
-Bash("grep -h -F '\"msg_id\": \"<msg_id>\"' ~/.claude/data/inter-session/messages.log* | head -1")
+Bash("grep -h -F '\"msg_id\": \"<msg_id>\"' ~/.claude/data/hubbub/messages.log* | head -1")
 ```
 
 Two details that matter here. The pattern is anchored on the `msg_id`

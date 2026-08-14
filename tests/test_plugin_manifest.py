@@ -61,13 +61,15 @@ class TestMonitorsJson:
         assert m["when"] in ("always", "on-skill-invoke:talk")
         assert "${CLAUDE_PLUGIN_ROOT}/skills/talk/bin/client.py" in m["command"]
 
-    def test_default_when_is_lazy(self):
-        """The default ships as 'on-skill-invoke:talk' — sessions
-        that never use the bus pay nothing. Users who want always-on can
-        flip with `/hubbub:talk auto-start on`.
+    def test_default_when_is_always(self):
+        """The default ships as 'always'. A bus you have to remember to join
+        is a bus nobody is on when a peer wants to reach them: lazy start meant
+        a session was only addressable after its own user invoked the skill,
+        which is backwards for a system whose whole point is being driven from
+        another session. Opt out with `/hubbub:talk auto-start off`.
         """
         m = json.loads((REPO / "monitors" / "monitors.json").read_text())[0]
-        assert m["when"] == "on-skill-invoke:talk"
+        assert m["when"] == "always"
 
     def test_command_works_in_plugin_dir_mode(self):
         """`--plugin-dir` mode does NOT run the userConfig prompt, so the
