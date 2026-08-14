@@ -1,4 +1,4 @@
-# inter-session
+# hubbub
 
 Agent-to-agent messaging for Claude Code sessions on the same machine. Each
 Claude Code session connects to a local WebSocket bus and can send messages
@@ -13,6 +13,20 @@ Does NOT require claude.ai login. No configuration needed.
 Localhost only and Unix-only (macOS, Linux, WSL2) for now.
 
 ![demo](./demo.svg)
+
+## Renamed from `inter-session`
+
+This project was called `inter-session` up to and including `0.1.4`. The
+plugin is now **`hubbub`** and its skill is **`talk`**, so the command is
+`/hubbub:talk` rather than `/inter-session:inter-session`.
+
+Nothing about the runtime moved: state still lives in
+`~/.claude/data/inter-session/`, the environment overrides are still
+`INTER_SESSION_PORT` / `INTER_SESSION_IDLE_MINUTES`, and notification
+lines still start with `[inter-session …]`. That split is deliberate —
+renaming the on-disk state or the line prefix would break sessions that
+are already connected under the old build, and those identifiers are
+invisible to users anyway. They can be migrated later, on their own.
 
 ## About this fork
 
@@ -29,7 +43,7 @@ fork is where the fixes live.
 | **SEC-001 — sender spoofing** | A peer's Unicode `label` was interpolated into the notification line unescaped, so it could close the header's bracket and forge the `from="…"` attribution. Now rejected at the boundary *and* neutralized at render. | [#8](https://github.com/yilunzhang/claude-code-inter-session/pull/8) |
 | **SEC-002 — forged trailing directive** | Message text could embed `[inter-session …]`-looking text that read as a second, more-trusted message. The reaction policy now states that only the leading header is authoritative. | [#9](https://github.com/yilunzhang/claude-code-inter-session/pull/9) |
 | **Label persistence** | Display labels were lost on every restart. They now persist per project, keyed by repo root. | [#11](https://github.com/yilunzhang/claude-code-inter-session/pull/11) |
-| **In-place relabel** | Changing a label used to mean disconnect + reconnect, losing the `session_id`. `/inter-session relabel` now updates it live. | [#13](https://github.com/yilunzhang/claude-code-inter-session/pull/13) |
+| **In-place relabel** | Changing a label used to mean disconnect + reconnect, losing the `session_id`. `/hubbub:talk relabel` now updates it live. | [#13](https://github.com/yilunzhang/claude-code-inter-session/pull/13) |
 | **Reply-transport binding** | A bus message answered with the harness's `SendMessage` silently reached the wrong session. Replies are now bound to the transport the message arrived on — see [docs/DELIVERY.md](./docs/DELIVERY.md). | fork-only |
 
 The `/plugin marketplace add` line under [Install](#install) points at
@@ -38,7 +52,7 @@ instead:
 
 ```
 /plugin marketplace add https://github.com/agigante80/claude-code-inter-session
-/plugin install inter-session
+/plugin install hubbub
 ```
 
 Upstream remains the canonical project; if the PRs land, the two
@@ -50,12 +64,12 @@ Claude Code already has two concurrency primitives:
 [subagents](https://code.claude.com/docs/en/sub-agents) (the `Agent`
 tool — spawn a worker inside your session for a focused subtask) and
 [agent teams](https://code.claude.com/docs/en/agent-teams) (a team of
-independent CC sessions launched together for one task). inter-session
+independent CC sessions launched together for one task). hubbub
 is a different axis: it connects the **long-lived Claude Code sessions
 you've already opened** across terminals and projects, so they can
 message each other.
 
-| Aspect          | Subagent                                          | Agent team                                                | inter-session                                                                |
+| Aspect          | Subagent                                          | Agent team                                                | hubbub                                                                |
 | :-------------- | :------------------------------------------------ | :-------------------------------------------------------- | :--------------------------------------------------------------------------- |
 | Context         | Own window; results return to the caller          | Own window; fully independent                             | Own window; fully independent; each session keeps its user-driven conversation |
 | Communication   | Reports back to the main agent only               | Teammates message each other directly                     | Peer-to-peer across every connected session                                  |
@@ -73,7 +87,7 @@ each other, and coordinate inside one task — best for parallel research
 with competing hypotheses, parallel code review, and feature work where
 each teammate owns a separate piece.
 
-**Use inter-session** when you have multiple Claude Code sessions
+**Use hubbub** when you have multiple Claude Code sessions
 running for unrelated long-lived work and want one to drive another —
 e.g. delegating a bug fix from one project's session to another's;
 running iterative loops where each side's context grows in value
@@ -85,7 +99,7 @@ them.
 
 **Transition point**: if you find yourself copy-pasting between Claude
 Code sessions you already have open, or if your agent-team task spans
-multiple projects you're working in separately, inter-session is the
+multiple projects you're working in separately, hubbub is the
 natural fit — your existing sessions become the team.
 
 ## Prerequisites
@@ -99,22 +113,22 @@ In any Claude Code session:
 
 ```
 /plugin marketplace add https://github.com/yilunzhang/claude-code-inter-session
-/plugin install inter-session
+/plugin install hubbub
 ```
 
 Then start using it:
 
 ```
-/inter-session:inter-session
+/hubbub:talk
 ```
 
 Claude handles runtime dependency install automatically on first use — no
 extra setup needed.
 
 By default the monitor starts **lazily** — it spins up the first time
-you invoke any `/inter-session:inter-session` command in a given Claude
+you invoke any `/hubbub:talk` command in a given Claude
 Code session. To switch to always-on auto-start at every session open,
-run `/inter-session:inter-session auto-start on` (then `/reload-plugins`).
+run `/hubbub:talk auto-start on` (then `/reload-plugins`).
 
 ## Examples
 
@@ -133,13 +147,13 @@ Two Claude Code sessions, each in a different project.
 
 **Session A** (in `~/proj/auth`):
 ```
-/inter-session:inter-session
+/hubbub:talk
 → Connecting as `auth-refactor`…
 ```
 
 **Session B** (in `~/proj/payments`):
 ```
-/inter-session:inter-session
+/hubbub:talk
 → Connecting as `payments-debug`…
 ```
 
@@ -162,7 +176,7 @@ send the bug you found to payments session and ask it to fix it.
 ```
 
 The receiving agent applies guardrails before acting (see the
-[Reaction policy](./skills/inter-session/SKILL.md)) — destructive
+[Reaction policy](./skills/talk/SKILL.md)) — destructive
 operations require explicit affirmative content; ambiguous requests
 prompt a `question:` clarifier first.
 
@@ -265,17 +279,17 @@ collaboration.
 
 | Command                                                        | What it does                                                   |
 | :------------------------------------------------------------- | :------------------------------------------------------------- |
-| `/inter-session:inter-session`                                 | Connect (alias for `connect`).                                 |
-| `/inter-session:inter-session connect [name]`                  | Connect to the bus; `name` proposed from context if omitted.   |
-| `/inter-session:inter-session install-deps`                    | Install runtime deps (websockets, psutil) into an isolated venv. |
-| `/inter-session:inter-session list`                            | List connected sessions.                                       |
-| `/inter-session:inter-session send <name> <text>`              | Send a message to one session.                                 |
-| `/inter-session:inter-session broadcast <text>`                | Send to all other sessions (≤ 256 KB).                         |
-| `/inter-session:inter-session rename <new-name>`               | Rename — implemented as disconnect + reconnect.                |
-| `/inter-session:inter-session relabel <text>`                  | Change this session's label in place (no reconnect); `""` clears. Persists per project. |
-| `/inter-session:inter-session status`                          | Heuristic connection state.                                    |
-| `/inter-session:inter-session disconnect`                      | Stop the monitor.                                              |
-| `/inter-session:inter-session auto-start [on\|off\|status]`    | Toggle auto-start. `on` = start at every session; `off` = lazy (default). Apply with `/reload-plugins`. |
+| `/hubbub:talk`                                 | Connect (alias for `connect`).                                 |
+| `/hubbub:talk connect [name]`                  | Connect to the bus; `name` proposed from context if omitted.   |
+| `/hubbub:talk install-deps`                    | Install runtime deps (websockets, psutil) into an isolated venv. |
+| `/hubbub:talk list`                            | List connected sessions.                                       |
+| `/hubbub:talk send <name> <text>`              | Send a message to one session.                                 |
+| `/hubbub:talk broadcast <text>`                | Send to all other sessions (≤ 256 KB).                         |
+| `/hubbub:talk rename <new-name>`               | Rename — implemented as disconnect + reconnect.                |
+| `/hubbub:talk relabel <text>`                  | Change this session's label in place (no reconnect); `""` clears. Persists per project. |
+| `/hubbub:talk status`                          | Heuristic connection state.                                    |
+| `/hubbub:talk disconnect`                      | Stop the monitor.                                              |
+| `/hubbub:talk auto-start [on\|off\|status]`    | Toggle auto-start. `on` = start at every session; `off` = lazy (default). Apply with `/reload-plugins`. |
 
 ## Session labels
 
@@ -299,7 +313,7 @@ To change the label of an already-connected session **without reconnecting**
 all peers and persists it too:
 
 ```
-/inter-session relabel "the controller"     # "" clears it
+/hubbub:talk relabel "the controller"     # "" clears it
 ```
 
 ## Plugin configuration
@@ -320,9 +334,9 @@ The WebSocket port and idle-shutdown timeout are configurable via
 - Any process running as the same Unix user can read the token and
   connect. This is acceptable for single-user, single-machine.
 - The token does **not** protect against malicious code running as your
-  user. If you don't trust local code, don't enable inter-session.
+  user. If you don't trust local code, don't enable hubbub.
 - The receiving agent's reaction policy (see
-  [SKILL.md](./skills/inter-session/SKILL.md)) treats peer messages as
+  [SKILL.md](./skills/talk/SKILL.md)) treats peer messages as
   instructions but applies the same caution as user input —
   destructive ops need explicit affirmative content, and ambiguous
   requests prompt a `question:` clarifier first.

@@ -18,7 +18,7 @@ import websockets
 from bin import shared, client as client_mod, spawn
 
 REPO = Path(__file__).resolve().parent.parent
-BIN_DIR = REPO / "skills" / "inter-session" / "bin"
+BIN_DIR = REPO / "skills" / "talk" / "bin"
 
 
 @pytest.fixture

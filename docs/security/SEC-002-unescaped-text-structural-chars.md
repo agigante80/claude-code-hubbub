@@ -3,7 +3,7 @@
 | Field | Value |
 | :--- | :--- |
 | **Status** | Open |
-| **Component** | `skills/inter-session/bin` (message rendering) |
+| **Component** | `skills/talk/bin` (message rendering) |
 | **Category** | Output encoding / injection (directive spoofing) |
 | **Reporter** | Security review, 2026-07-12 |
 | **Initial severity (raw finding)** | (surfaced during SEC-001 verification) |
@@ -12,11 +12,11 @@
 
 ## Affected code
 
-- `skills/inter-session/bin/shared.py:141-153` — `sanitize_for_stdout` strips ANSI
+- `skills/talk/bin/shared.py:141-153` — `sanitize_for_stdout` strips ANSI
   and Unicode control categories and folds `\n`/`\r` to `↵`, but does **not**
   strip or escape the structural characters `[`, `]`, `"`, `=` that delimit the
   notification header.
-- `skills/inter-session/bin/client.py:52,62` — sanitized-but-unescaped `text` is
+- `skills/talk/bin/client.py:52,62` — sanitized-but-unescaped `text` is
   appended to the notification line after the header.
 
 ## Description

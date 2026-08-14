@@ -1,8 +1,8 @@
 [
   {
-    "name": "inter-session-client",
-    "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/inter-session/bin/client.py",
-    "description": "inter-session messages",
-    "when": "on-skill-invoke:inter-session"
+    "name": "hubbub-client",
+    "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/talk/bin/client.py",
+    "description": "hubbub messages",
+    "when": "on-skill-invoke:talk"
   }
 ]

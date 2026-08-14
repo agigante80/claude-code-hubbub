@@ -16,7 +16,7 @@ import pytest
 from bin import shared
 
 REPO = Path(__file__).resolve().parent.parent
-BIN_DIR = REPO / "skills" / "inter-session" / "bin"
+BIN_DIR = REPO / "skills" / "talk" / "bin"
 
 
 @pytest.fixture
@@ -359,7 +359,7 @@ class TestStaleStateCleanup:
 @pytest.mark.slow
 class TestStateFileLifecycle:
     """Regression: client.py should delete its state file on graceful exit
-    (SIGTERM) so the next /inter-session sees a clean slate."""
+    (SIGTERM) so the next /hubbub:talk sees a clean slate."""
 
     def test_state_deleted_on_sigterm(self, tmp_data_dir, free_port):
         ppid = 60003

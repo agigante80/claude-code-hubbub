@@ -60,7 +60,7 @@ question over the bus at 12:18:30, had it in context at 12:18:31, and
 answered at 12:20:27 — using the harness's `SendMessage`, addressed to
 `arivit-social-b1 [3c9090]`. The bus peer that asked never got a reply.
 Neither side saw an error. This is what the
-[reply-on-the-same-transport rule](../skills/inter-session/SKILL.md)
+[reply-on-the-same-transport rule](../skills/talk/SKILL.md)
 exists to prevent, and `tests/test_reaction_policy.py` keeps that rule
 in the prose.
 

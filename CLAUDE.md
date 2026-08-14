@@ -11,20 +11,20 @@ exchange messages that drive actions in the receiving session.
 Two install modes, **both supported and tested**:
 
 - **Plugin** (recommended): `/plugin marketplace add …` → `/plugin
-  install inter-session@inter-session`, or `claude --plugin-dir <repo>`
+  install hubbub@hubbub`, or `claude --plugin-dir <repo>`
   for local dev. Adds `userConfig` (port, idle-shutdown) and
-  `monitors.json`. User invokes as `/inter-session:inter-session …`.
-- **Standalone skill**: clone or symlink `skills/inter-session/` to
-  `~/.claude/skills/inter-session/` (e.g. `ln -s
-  <repo>/skills/inter-session ~/.claude/skills/inter-session`). The
+  `monitors.json`. User invokes as `/hubbub:talk …`.
+- **Standalone skill**: clone or symlink `skills/talk/` to
+  `~/.claude/skills/talk/` (e.g. `ln -s
+  <repo>/skills/talk ~/.claude/skills/talk`). The
   skill is self-contained — `bin/`, `requirements.txt`, and `SKILL.md`
-  all live inside `skills/inter-session/`, so a copy or symlink of just
+  all live inside `skills/talk/`, so a copy or symlink of just
   that subdirectory is a fully working skill. User invokes as
-  `/inter-session …` (no plugin namespace). No `userConfig`; override
+  `/hubbub:talk …` (no plugin namespace). No `userConfig`; override
   defaults via `INTER_SESSION_PORT` / `INTER_SESSION_IDLE_MINUTES` env
   vars if needed.
 
-The skill content (`skills/inter-session/SKILL.md`) is install-mode
+The skill content (`skills/talk/SKILL.md`) is install-mode
 agnostic: the connect step has **no upfront dedup check**. It picks a
 name and calls `Monitor()` directly. If a monitor is already running
 for this CC session, `bin/client.py`'s ppid-flock catches the duplicate
@@ -40,17 +40,17 @@ the common case than it saved in the edge case.
 Layout follows the conventional `skills/<name>/SKILL.md` auto-discovery
 pattern that the current CC plugin schema requires (`"skills": ["./"]`
 is rejected with "Path escapes plugin directory"). **`bin/` lives
-inside the skill dir** (`skills/inter-session/bin/`). The plugin's
-monitor `when` defaults to `on-skill-invoke:inter-session` (lazy);
+inside the skill dir** (`skills/talk/bin/`). The plugin's
+monitor `when` defaults to `on-skill-invoke:talk` (lazy);
 `bin/auto_start.py` flips it to `always` when the user runs
-`/inter-session auto-start on`. Empirically `on-skill-invoke` may not
+`/hubbub:talk auto-start on`. Empirically `on-skill-invoke` may not
 reliably auto-spawn a working monitor in current CC versions, so the
 LLM's `Monitor()` call in the skill is what actually establishes the
 connection most of the time.
 
 When CLAUDE.md and other docs reference `bin/<script>.py` as an
 abbreviated label, the actual path is
-`skills/inter-session/bin/<script>.py`.
+`skills/talk/bin/<script>.py`.
 
 Single user, single machine. Unix-only (macOS / Linux / WSL2).
 
@@ -78,7 +78,7 @@ Never run two pytest sessions concurrently — the subprocess-spawning
 tests bind real ports and race each other into spurious failures.
 
 No build step, no linter configured. Runtime deps live at
-`skills/inter-session/requirements.txt` (websockets + psutil); dev
+`skills/talk/requirements.txt` (websockets + psutil); dev
 deps inherit those plus pytest via `requirements-dev.txt`. Both reqs
 files install into `.venv` via `make test` — there's nothing to install
 by hand.
@@ -129,6 +129,24 @@ constants it enforces against live in `shared.py`. Broadcasts are rate
 limited to 60/min per sender; `messages.log` rotates at 50 MB × 5.
 
 ## Non-obvious invariants (read before changing the affected code)
+
+### The rename is deliberately half-done
+
+The project was `inter-session` through `0.1.4`; the plugin is now
+`hubbub` and the skill is `talk` (`/hubbub:talk`). **Identity was
+renamed, runtime identifiers were not**, and that asymmetry is
+intentional:
+
+| Renamed | Left as `inter-session` |
+| :------ | :---------------------- |
+| plugin + marketplace `name`, repo/docs, `skills/talk/`, `monitors.json` (`hubbub-client`, `on-skill-invoke:talk`, description `hubbub messages`) | `~/.claude/data/inter-session/` (token, pidfile, `messages.log`, `clients/*`), `INTER_SESSION_*` env vars, the `[inter-session …]` stdout prefix |
+
+Renaming the data dir would strand the state of every already-connected
+session; renaming the stdout prefix would break the reaction policy for
+any peer still running an older build, since the prefix is the wire
+contract between monitor and skill. Migrate them separately, with a
+compatibility window, or not at all — but don't "finish the rename" in
+one sweep and assume it's cosmetic.
 
 ### Server election (`bin/spawn.py` + `bin/server.py --fd`)
 
@@ -183,7 +201,7 @@ receiving the token.
 
 - `.venv` at the repo root — **dev/test only**, created by the Makefile.
 - `~/.claude/data/inter-session/venv` — the **user's runtime venv**,
-  created by `/inter-session install-deps`, holding websockets + psutil.
+  created by `/hubbub:talk install-deps`, holding websockets + psutil.
 
 The first ~10 lines of `client.py`, `send.py`, and `list.py` are a
 bootstrap that `os.execv`s the script under the *runtime* venv's
@@ -335,7 +353,7 @@ prose so prose edits can't accidentally drop a guardrail.
 ## Don't
 
 - **Don't blanket `pkill -f 'bin/(client|server).py'`** during local
-  testing — it will kill real user inter-session monitors running in
+  testing — it will kill real user hubbub monitors running in
   other CC sessions. Target specific pids via the pidfile
   (`~/.claude/data/inter-session/server.<port>.pid`) or
   `TaskList()`-derived monitor task IDs.

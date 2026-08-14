@@ -1,7 +1,7 @@
 {
-  "name": "inter-session",
+  "name": "hubbub",
   "version": "0.1.4",
-  "description": "Inter-agent messaging for Claude Code sessions on the same machine.",
+  "description": "Agent-to-agent messaging for Claude Code sessions on the same machine.",
   "monitors": "./monitors/monitors.json",
   "userConfig": {
     "port": {
