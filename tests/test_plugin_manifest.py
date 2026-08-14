@@ -27,6 +27,20 @@ class TestPluginJson:
             '["./"] and ["."]. Auto-discovery scans skills/<name>/SKILL.md.'
         )
 
+    def test_version_matches_marketplace(self):
+        """plugin.json drives installed-plugin update detection,
+        marketplace.json drives the marketplace listing. A bump that lands
+        in only one leaves installs silently stuck on the old version, so
+        the two must always agree."""
+        plugin = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
+        market = json.loads((REPO / ".claude-plugin" / "marketplace.json").read_text())
+        entries = [p for p in market["plugins"] if p["name"] == plugin["name"]]
+        assert len(entries) == 1, f"no single marketplace entry for {plugin['name']!r}"
+        assert plugin["version"] == entries[0]["version"], (
+            f"version drift: plugin.json {plugin['version']!r} != "
+            f"marketplace.json {entries[0]['version']!r}"
+        )
+
     def test_user_config_shape(self):
         cfg = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
         uc = cfg["userConfig"]
