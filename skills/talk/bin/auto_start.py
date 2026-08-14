@@ -21,6 +21,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Allow running as a script.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from bin import shared
+
 ALWAYS = "always"
 LAZY = "on-skill-invoke:talk"
 MONITOR_NAME = "hubbub-client"
@@ -88,6 +95,18 @@ def _atomic_write(path: Path, data: str) -> None:
         raise
 
 
+def _set_optout(off: bool) -> None:
+    """Mirror the setting into the data dir, which `/plugin update` cannot
+    overwrite. See shared.autostart_optout_path for why the plugin file alone
+    is not enough."""
+    path = shared.autostart_optout_path()
+    if off:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    else:
+        path.unlink(missing_ok=True)
+
+
 def cmd_status() -> int:
     path = _resolve_monitors_path()
     entry = _find_entry(_load(path))
@@ -98,9 +117,17 @@ def cmd_status() -> int:
         label = "OFF (lazy: starts on first /hubbub:talk invocation)"
     else:
         label = f"CUSTOM ({when})"
+    optout = shared.autostart_optout_path()
     print(f"auto-start: {label}")
     print(f"  when: {when}")
     print(f"  file: {path}")
+    if optout.exists():
+        print(f"  opt-out: {optout}")
+        if when == ALWAYS:
+            # A plugin update restored the shipped `always`; the durable
+            # opt-out is what is actually in force.
+            print("  note: monitors.json says always, but the opt-out above "
+                  "wins — the monitor exits immediately at session open.")
     return 0
 
 
@@ -110,10 +137,15 @@ def cmd_set(target: str) -> int:
     entry = _find_entry(monitors)
     prev = entry.get("when", "always")
     if prev == target:
+        # Still reassert the durable flag: a plugin update can restore the
+        # shipped `when` while leaving the data-dir opt-out stale, or vice
+        # versa, and `--on`/`--off` should always end in a coherent state.
+        _set_optout(target == LAZY)
         print(f"auto-start: already {target!r}; no change")
         return 0
     entry["when"] = target
     _atomic_write(path, json.dumps(monitors, indent=2) + "\n")
+    _set_optout(target == LAZY)
     print(f"auto-start: {prev!r} -> {target!r}")
     print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
     return 0
@@ -126,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--on", action="store_true", help=f'set when="{ALWAYS}"')
     g.add_argument("--off", action="store_true", help=f'set when="{LAZY}"')
     args = parser.parse_args(argv)
+    shared.migrate_legacy_data_dir()
 
     if args.status:
         return cmd_status()

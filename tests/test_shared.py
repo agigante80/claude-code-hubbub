@@ -396,10 +396,10 @@ class TestLegacyDataDirMigration:
         assert self.legacy.resolve() == self.new
 
     def test_migrates_when_install_deps_created_the_new_dir_first(self):
+        """`install-deps` is a standalone command, so <new>/venv can exist
+        before any monitor has migrated anything. A "new exists → bail" guard
+        would strand the token in the legacy dir forever."""
         self.legacy.mkdir(parents=True)
-        """On a deps-missing upgrade nothing migrates (client.py exits on the
-        import), then `install-deps` creates <new>/venv. A "new exists → bail"
-        guard would strand the token in the legacy dir forever."""
         (self.legacy / "token").write_text("live")
         (self.legacy / "clients").mkdir()
         (self.new / "venv" / "bin").mkdir(parents=True)
@@ -445,7 +445,7 @@ class TestLegacyDataDirMigration:
         assert (self.new / "venv" / "bin").is_dir()
         aside = self.legacy.with_name("inter-session.pre-rename")
         assert (aside / "venv").is_dir()
-        assert "can be deleted" in capsys.readouterr().err
+        assert "review it before deleting" in capsys.readouterr().err
 
     def test_symlink_still_lands_when_legacy_is_repopulated_mid_move(self, monkeypatch):
         """An old build still running can recreate clients/ between the scan
@@ -513,6 +513,63 @@ class TestLegacyDataDirMigration:
         assert (self.new / "token").read_text() == "new-token"
         assert not self.legacy.is_symlink()
         assert "cannot merge" in capsys.readouterr().err
+
+    def test_peer_finishing_mid_check_is_not_reported_as_a_conflict(self, monkeypatch):
+        """is_symlink() then is_dir(): a peer completing the migration between
+        the two makes is_dir() true *through the new symlink*, so src and dst
+        are the same directory and every entry collides with itself. With
+        when: "always" every session opens into this window."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "clients").mkdir()
+        real_is_dir = Path.is_dir
+
+        def peer_wins_first(p):
+            if p == self.legacy and not self.legacy.is_symlink():
+                os.rename(self.legacy, self.new)
+                self.legacy.symlink_to(self.new)
+            return real_is_dir(p)
+
+        monkeypatch.setattr(Path, "is_dir", peer_wins_first)
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert (self.new / "token").read_text() == "live"
+
+    def test_peer_creating_the_symlink_first_is_not_a_failure(self, monkeypatch, capsys):
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        real_symlink_to = Path.symlink_to
+
+        def taken(p, target, **kw):
+            real_symlink_to(p, target, **kw)
+            raise FileExistsError(17, "File exists")
+
+        monkeypatch.setattr(Path, "symlink_to", taken)
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert capsys.readouterr().err == ""
+
+    def test_partial_drain_still_reaches_the_symlink(self, monkeypatch, capsys):
+        """One entry failing to move must not abort before the symlink. A
+        half-drained legacy dir left as a real directory is the split namespace
+        the whole function exists to prevent, and the next run would see a live
+        collision and refuse for good."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "wedged").write_text("x")
+        self.new.mkdir(parents=True)
+        real_rename = os.rename
+
+        def refuse_one(src, dst):
+            if Path(src).name == "wedged":
+                raise PermissionError(13, "Permission denied")
+            return real_rename(src, dst)
+
+        monkeypatch.setattr(shared.os, "rename", refuse_one)
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert (self.new / "token").read_text() == "live"
+        assert "wedged" in capsys.readouterr().err
 
     def test_env_override_suppresses_migration(self, tmp_path, monkeypatch):
         """An explicit data dir means the caller owns the layout; don't go

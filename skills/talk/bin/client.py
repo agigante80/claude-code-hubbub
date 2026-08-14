@@ -419,8 +419,24 @@ def main() -> int:
         default=10,
     ))
     parser.add_argument("--verbose", action="store_true")
+    # Set only by monitors.json. Distinguishes "CC auto-started me at session
+    # open" from "the user asked for a connection", which is what makes a
+    # durable opt-out and a quiet missing-deps exit possible.
+    parser.add_argument("--from-monitor", action="store_true",
+                        help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.from_monitor and shared.autostart_optout_path().exists():
+        # `/hubbub:talk auto-start off`. The shipped monitors.json says
+        # "always" and a plugin update restores it, so the opt-out has to be
+        # enforced here rather than trusted to survive in the plugin dir.
+        return 0
+
     if _MISSING_DEP is not None:
+        if args.from_monitor:
+            # Auto-started in a session that may never touch the bus. Nagging
+            # about install-deps at every session open is noise; the user gets
+            # the actionable message when they actually invoke the skill.
+            return 0
         _print_line(f"[inter-session] dependencies missing — run /hubbub:talk install-deps ({_MISSING_DEP})")
         return 0
 

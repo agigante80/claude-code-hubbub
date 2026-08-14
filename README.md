@@ -28,19 +28,30 @@ This project was called `inter-session` up to and including `0.1.3`. The
 plugin is now **`hubbub`** and its skill is **`talk`**, so the command is
 `/hubbub:talk` rather than `/inter-session:inter-session`.
 
-Nothing about the runtime moved: state still lives in
-`~/.claude/data/hubbub/`, the environment overrides are still
-`HUBBUB_PORT` / `HUBBUB_IDLE_MINUTES`, and notification
-lines still start with `[inter-session …]`. That split is deliberate —
-renaming the on-disk state or the line prefix would break sessions that
-are already connected under the old build, and those identifiers are
-invisible to users anyway. They can be migrated later, on their own.
+The runtime followed in `0.2.0`, but carefully, because a hard cutover
+would split the bus in half:
+
+- **State lives in `~/.claude/data/hubbub/`.** On first run the old
+  directory is moved there and **`~/.claude/data/inter-session` is left
+  behind as a symlink to it**. Don't delete that symlink. Older builds
+  hardcode the legacy path, and they have to keep resolving to the *same*
+  token, election lock and pidfile — otherwise two clients each elect
+  their own server, both bind the port, and the loser's cleanup wipes the
+  winner's identity.
+- **Environment overrides are `HUBBUB_PORT` / `HUBBUB_IDLE_MINUTES`**,
+  and the pre-rename `INTER_SESSION_*` spellings are still honoured, so
+  an old export in your shell profile keeps working.
+- **Notification lines still start with `[inter-session …]`.** That one
+  is genuinely unfinished: the prefix is the contract between the monitor
+  and the skill's reaction policy, so it needs a release that accepts
+  both spellings before the emitter can move. Tracked in
+  [#10](https://github.com/agigante80/claude-code-hubbub/issues/10).
 
 ### Upgrading from `inter-session`
 
-Because both plugins share the bus, the port, and the data directory,
-old and new clients interoperate — so you can migrate one session at a
-time. Two things are easy to get wrong:
+Because both plugins share the bus, the port, and — via that symlink —
+the data directory, old and new clients interoperate, so you can migrate
+one session at a time. Three things are easy to get wrong:
 
 1. **Installing `hubbub` does not migrate a running session.** The old
    monitor still holds that session's lock, so the new one exits with
@@ -55,6 +66,11 @@ time. Two things are easy to get wrong:
    is enough to put the whole machine back on the old build. Restart
    those sessions, or remove the stale cache directory, if you need to
    be certain which version is serving.
+3. **Don't tidy up `~/.claude/data/inter-session` while cleaning up the
+   rest.** After `0.2.0` it is the compatibility symlink described above,
+   not a leftover. Remove it and any still-running old build stops
+   sharing the token and the election lock with the new ones, which is
+   the one way to genuinely fork the bus.
 
 To force the server itself to the new build, get to zero connected
 clients (or `kill` the pid in `~/.claude/data/hubbub/server.<port>.pid`)
@@ -64,7 +80,7 @@ and let a new-path client elect a fresh one.
 
 This is a **maintained fork** of
 [yilunzhang/claude-code-inter-session](https://github.com/yilunzhang/claude-code-inter-session).
-Upstream last shipped `0.1.3` on 2026-05-24. This fork is at **`0.1.5`**:
+Upstream last shipped `0.1.3` on 2026-05-24. This fork is at **`0.2.0`**:
 everything below was developed here on top of that release and offered
 back upstream as pull requests, which are still open — so for now this
 fork is where the fixes live.
@@ -163,7 +179,10 @@ followed by `/plugin install inter-session` — that ships upstream's
 `0.1.3` without the fixes listed under [About this fork](#about-this-fork).
 
 Claude handles runtime dependency install automatically on first use — no
-extra setup needed.
+extra setup needed. Until then the auto-started monitor exits quietly at
+session open rather than nagging in sessions that never touch the bus;
+you get the actionable `install-deps` prompt the first time you actually
+invoke `/hubbub:talk`.
 
 By default the monitor starts at **every session open**, so a session is
 reachable by its peers without anyone having to invoke anything in it
