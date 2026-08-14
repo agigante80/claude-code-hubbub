@@ -659,7 +659,43 @@ class TestLegacyDataDirMigration:
         assert (self.legacy / "token").read_text() == "live"
         assert not (self.new / "token").exists()
         assert not self.legacy.is_symlink()
-        assert "leaving the migration for a human" in capsys.readouterr().err
+        assert "could not finish draining" in capsys.readouterr().err
+
+    def test_dangling_symlink_is_not_a_free_aside_name(self, capsys):
+        """Path.exists() follows symlinks, so a dangling one in the aside slot
+        reports False and gets handed back as free — then the rename onto it
+        fails with ENOTDIR, after the live state has already moved."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "venv").mkdir()
+        self.new.mkdir(parents=True)
+        (self.new / "venv").mkdir()          # forces the set-aside path
+        dangling = self.legacy.with_name("inter-session.pre-rename")
+        dangling.symlink_to(self.legacy.with_name("gone"))
+        shared.migrate_legacy_data_dir()
+        assert self.legacy.is_symlink()
+        assert (self.new / "token").read_text() == "live"
+        # Skipped the dangling slot rather than trying to rename onto it.
+        assert (self.legacy.with_name("inter-session.pre-rename-2") / "venv").is_dir()
+
+    def test_unwritable_parent_rolls_back_rather_than_half_migrating(self, capsys):
+        """`src/token -> dst/token` needs no write on the parent, but renaming
+        `src` aside does. Failing there after the live move is the same fork."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "venv").mkdir()
+        self.new.mkdir(parents=True)
+        (self.new / "venv").mkdir()
+        parent = self.legacy.parent
+        parent.chmod(0o500)
+        try:
+            shared.migrate_legacy_data_dir()
+        finally:
+            parent.chmod(0o700)
+        assert not self.legacy.is_symlink()
+        assert (self.legacy / "token").read_text() == "live"
+        assert not (self.new / "token").exists()
+        assert "could not finish draining" in capsys.readouterr().err
 
     def test_aside_falls_back_to_a_free_name(self, capsys):
         self.legacy.mkdir(parents=True)

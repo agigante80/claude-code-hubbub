@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import os
 import socket
@@ -559,3 +560,65 @@ class TestEnvVarConfig:
         from bin.client import _env_float
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_IDLE_SHUTDOWN_MINUTES", "0.5")
         assert _env_float("CLAUDE_PLUGIN_OPTION_IDLE_SHUTDOWN_MINUTES", "X", default=10) == 0.5
+
+
+class TestAutoStartedNoticesAreQuiet:
+    """With `when: "always"` client.py runs in every session on the machine,
+    so housekeeping on stdout becomes a notification before the user has typed
+    anything — in projects whose user has never used hubbub. stderr still
+    reaches the monitor's output file, so nothing is lost.
+
+    The split is also load-bearing for connect: CLAUDE.md's invariant is that
+    the duplicate-monitor error surfaces to the LLM, which holds only because
+    the skill's own Monitor() command omits --from-monitor.
+    """
+
+    def _run(self, tmp_path, extra_args, ppid):
+        env = dict(os.environ)
+        env.update({
+            "HUBBUB_DATA_DIR": str(tmp_path / "data"),
+            "HUBBUB_NO_REEXEC": "1",
+            "HUBBUB_PPID_OVERRIDE": str(ppid),
+        })
+        return subprocess.run(
+            [sys.executable, str(BIN_DIR / "client.py"), *extra_args],
+            capture_output=True, text=True, env=env, timeout=30,
+            cwd=str(tmp_path),
+        )
+
+    def _state(self, tmp_path, ppid):
+        clients = tmp_path / "data" / "clients"
+        clients.mkdir(parents=True, exist_ok=True)
+        (clients / f"{ppid}.lock").touch()
+        (clients / f"{ppid}.session").write_text(json.dumps({
+            "name": "incumbent", "session_id": "abc123",
+            "listener_pid": os.getpid(), "nonce": "n",
+            "host": "127.0.0.1", "port": 9473,
+        }))
+        return clients / f"{ppid}.lock"
+
+    @pytest.mark.slow
+    def test_duplicate_notice_reaches_stdout_without_the_flag(self, tmp_path):
+        ppid = 424242
+        lock = self._state(tmp_path, ppid)
+        held = open(lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            r = self._run(tmp_path, ["--name", "x"], ppid)
+        finally:
+            held.close()
+        assert "already running" in r.stdout, r.stderr
+        assert "already running" not in r.stderr
+
+    @pytest.mark.slow
+    def test_duplicate_notice_is_quiet_with_the_flag(self, tmp_path):
+        ppid = 424243
+        lock = self._state(tmp_path, ppid)
+        held = open(lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            r = self._run(tmp_path, ["--name", "x", "--from-monitor"], ppid)
+        finally:
+            held.close()
+        assert "already running" in r.stderr
+        assert "already running" not in r.stdout

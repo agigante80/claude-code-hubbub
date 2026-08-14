@@ -368,9 +368,12 @@ Bash("python3 <bin>/list.py --self")     # prints listener_pid=<pid>
 Bash("kill <pid>")
 ```
 
-Then confirm with `list.py --self` that the session is gone. Reporting
-"disconnected" after a `TaskList()` that matched nothing leaves the
-session on the bus and reachable by peers.
+Wait ~1.5s, then confirm with `list.py --self`. The wait matters: after
+SIGTERM the monitor still has to unwind its event loop, send `bye`, and
+delete its state file, so an immediate check often still prints
+`name=…` and reads as a failed disconnect — leading to a second,
+needless kill. Reporting "disconnected" after a `TaskList()` that matched
+nothing leaves the session on the bus and reachable by peers.
 
 ## auto-start — toggle plugin auto-start mode
 

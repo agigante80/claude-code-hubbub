@@ -233,50 +233,62 @@ def _drain_into(src: Path, dst: Path) -> bool:
                             f"relocated behind a running bus")
             return False
 
-    stuck = []
-    for e in (x for x in pending if x.name in _DISPOSABLE):
-        try:
-            if (dst / e.name).exists():
+    # Everything from here runs with live state already moved, so every exit
+    # has to either finish the migration or put it back. Three rounds of review
+    # found three separate escapes from this section — a returned False, an
+    # unguarded rename, a lexists bug — each leaving `dst` holding the token
+    # while `src` stayed a real directory an older build would repopulate. One
+    # guard over the lot, rather than a fourth patched branch.
+    try:
+        stuck = []
+        for e in (x for x in pending if x.name in _DISPOSABLE):
+            try:
+                if (dst / e.name).exists():
+                    stuck.append(e.name)
+                    continue
+                os.rename(e, dst / e.name)
+            except OSError:
+                # Regenerable, so a failure here is not worth abandoning the
+                # migration over — the set-aside path below takes the rest.
                 stuck.append(e.name)
-                continue
-            os.rename(e, dst / e.name)
-        except OSError:
-            # Regenerable, so a failure here is not worth abandoning the
-            # migration over — the set-aside path below handles the remainder.
-            stuck.append(e.name)
-    if stuck:
-        _migration_warn(f"could not move {sorted(stuck)} out of {src}")
+        if stuck:
+            _migration_warn(f"could not move {sorted(stuck)} out of {src}")
+        _finish_drain(src, dst)
+    except OSError as err:
+        if _migration_complete(src, dst):
+            return True
+        _migration_warn(f"could not finish draining {src}: {err}")
+        _rollback(moved)
+        return False
+    return True
+
+
+def _finish_drain(src: Path, dst: Path) -> None:
+    """Empty `src` so the caller can replace it with a symlink. Raises OSError
+    rather than returning a status: the caller owns the rollback."""
     try:
         src.rmdir()
+        return
     except OSError:
-        # Either a disposable collision is still sitting there, or an old build
-        # recreated something (e.g. clients/) between the scan and now. Set the
-        # remainder aside wholesale so the symlink can still go in — leaving
-        # `src` a real directory is the one outcome that forks the namespace.
-        aside = _free_aside_path(src)
-        if aside is None:
-            # Every candidate name is taken. The live state above has already
-            # moved, so returning False here would abort the caller *after*
-            # the move — no symlink, no marker, and `src` left a real directory
-            # that an older build repopulates with a fresh token. Put it back
-            # instead and leave the disk as we found it.
-            _migration_warn(f"{src} still holds entries and every "
-                            f"{src.name}.pre-rename* name is taken; "
-                            f"leaving the migration for a human")
-            _rollback(moved)
-            return False
-        leftovers = {e.name for e in src.iterdir()}
-        os.rename(src, aside)
-        if leftovers - _DISPOSABLE:
-            _migration_warn(f"set {aside} aside so {src} could become a "
-                            f"symlink; review it before deleting")
-        else:
-            # Only regenerable files — almost always the pre-rename venv,
-            # superseded by the one at the new path. Say what it is rather
-            # than sending every upgrading user off to audit a directory.
-            _migration_warn(f"superseded {sorted(leftovers)} moved to {aside}; "
-                            f"safe to delete")
-    return True
+        pass
+    # Either a disposable collision is still sitting there, or an old build
+    # recreated something (e.g. clients/) between the scan and now. Set the
+    # remainder aside wholesale so the symlink can still go in — leaving
+    # `src` a real directory is the one outcome that forks the namespace.
+    aside = _free_aside_path(src)
+    if aside is None:
+        raise OSError(f"every {src.name}.pre-rename* name is taken")
+    leftovers = {e.name for e in src.iterdir()}
+    os.rename(src, aside)
+    if leftovers - _DISPOSABLE:
+        _migration_warn(f"set {aside} aside so {src} could become a "
+                        f"symlink; review it before deleting")
+    else:
+        # Only regenerable files — almost always the pre-rename venv,
+        # superseded by the one at the new path. Say what it is rather than
+        # sending every upgrading user off to audit a directory.
+        _migration_warn(f"superseded {sorted(leftovers)} moved to {aside}; "
+                        f"safe to delete")
 
 
 def _legacy_points_at(legacy: Path, new: Path) -> bool:
@@ -337,7 +349,10 @@ def _free_aside_path(src: Path) -> Path | None:
     rather than required to — so a taken name must not be a dead end."""
     for suffix in ("", *(f"-{n}" for n in range(2, 20))):
         candidate = src.with_name(f"{src.name}.pre-rename{suffix}")
-        if not candidate.exists():
+        # lexists, not exists: a *dangling* symlink parked here reports
+        # exists() == False, so we would hand back an occupied name and the
+        # rename onto it fails with ENOTDIR.
+        if not os.path.lexists(candidate):
             return candidate
     return None
 
@@ -649,6 +664,31 @@ def _pidfile_meta_matches(
     if host is not None and meta.get("host") != host:
         return False
     return True
+
+
+def pid_is_our_client(pid: int) -> bool:
+    """True only if `pid` is alive AND looks like one of our monitors.
+
+    `safe_pid_alive` is a bare `kill(pid, 0)`. A monitor that was SIGKILLed
+    never ran its atexit cleanup, so the state file outlives it with a stale
+    pid — and after pid wraparound that pid is alive and belongs to something
+    else entirely. Anything that hands a pid to a human or an agent to `kill`
+    has to check identity, the way verify_server_identity does for the server.
+
+    Conservative when psutil is missing or the process is unreadable: says no,
+    so a caller never kills on the strength of a guess.
+    """
+    if not safe_pid_alive(pid):
+        return False
+    try:
+        import psutil
+    except ImportError:
+        return False
+    try:
+        cmdline = psutil.Process(pid).cmdline()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+        return False
+    return any("client.py" in str(a) for a in cmdline)
 
 
 def _cmdline_port_matches(cmdline: list[str], port: int | None) -> bool:
