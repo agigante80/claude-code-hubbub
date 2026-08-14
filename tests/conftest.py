@@ -35,3 +35,17 @@ def free_port():
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+@pytest.fixture(autouse=True)
+def _reset_migration_flag():
+    """`shared._unmigrated_this_run` is process-global and written by
+    `migrate_legacy_data_dir()`. A test that drives it True leaves it set for
+    the rest of the run, and any later test that clears both *_DATA_DIR vars
+    and calls `data_dir()` then resolves against the developer's real $HOME —
+    passing today only because this machine's legacy path is already a symlink.
+    """
+    from bin import shared
+    shared._unmigrated_this_run = False
+    yield
+    shared._unmigrated_this_run = False

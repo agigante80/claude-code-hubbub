@@ -118,7 +118,7 @@ def unlink_if_matches(path: Optional[Path], expected_state: Optional[dict]) -> b
     # Derive lock path: `<ppid>.session` → `<ppid>.lock`.
     lock_path: Optional[Path] = None
     if path.name.endswith(".session"):
-        lock_path = path.with_name(path.name[: -len(".session")] + ".lock")
+        lock_path = shared.lock_path_for_session_file(path)
 
     fd = None
     if lock_path is not None and lock_path.exists():

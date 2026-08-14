@@ -1636,3 +1636,55 @@ class TestDanglingNewDirIsHandled:
         assert "Not a directory" not in capsys.readouterr().err
 
 
+
+
+class TestForeignSymlinkKeepsUsOnTheLiveToken:
+    """`inter-session` pointing somewhere other than the data dir is a user who
+    relocated their state under 0.1.x. The migration refuses to touch it — and
+    the refusal used to do the opposite of what it says: data_dir() returned
+    hubbub/, ensure_token() minted a fresh token there, and every connected
+    peer started getting `unauthorized`."""
+
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("INTER_SESSION_DATA_DIR", raising=False)
+        monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        self.tmp = tmp_path
+        self.legacy = tmp_path / ".claude" / "data" / "inter-session"
+        self.new = tmp_path / ".claude" / "data" / "hubbub"
+
+    def test_data_dir_follows_the_relocated_state(self, capsys):
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "token").write_text("LIVETOKEN")
+        self.legacy.parent.mkdir(parents=True)
+        self.legacy.symlink_to(elsewhere)
+        shared.migrate_legacy_data_dir()
+        assert "leaving it alone" in capsys.readouterr().err
+        assert shared.data_dir() == self.legacy
+        assert shared.token_path().read_text() == "LIVETOKEN"
+
+    def test_symlink_to_the_data_dir_is_not_treated_as_foreign(self):
+        self.new.mkdir(parents=True)
+        self.legacy.symlink_to(self.new)
+        shared.migrate_legacy_data_dir()
+        assert shared.data_dir() == self.new
+
+
+class TestSafePidAliveSurvivesInfinity:
+    def test_json_infinity(self):
+        assert shared.safe_pid_alive(json.loads('{"p": 1e400}')["p"]) is False
+
+    def test_float_nan(self):
+        assert shared.safe_pid_alive(float("nan")) is False
+
+
+class TestLockPathHasOneDefinition:
+    def test_derives_from_the_session_file(self, tmp_path):
+        p = tmp_path / "clients" / "1234.session"
+        assert shared.lock_path_for_session_file(p).name == "1234.lock"
+
+    def test_matches_client_lock_path(self, tmp_data_dir):
+        assert (shared.lock_path_for_session_file(shared.client_session_path(7))
+                == shared.client_lock_path(7))
