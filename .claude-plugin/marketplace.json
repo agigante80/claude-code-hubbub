@@ -2,18 +2,18 @@
   "name": "hubbub",
   "description": "Single-plugin marketplace for hubbub: agent-to-agent messaging for Claude Code sessions on the same machine.",
   "owner": {
-    "name": "Yilun Zhang",
-    "url": "https://github.com/yilunzhang"
+    "name": "Andrea Gigante",
+    "url": "https://github.com/agigante80"
   },
   "plugins": [
     {
       "name": "hubbub",
-      "description": "Agent-to-agent messaging for Claude Code sessions on the same machine.",
+      "description": "Agent-to-agent messaging for Claude Code sessions on the same machine. Maintained fork of yilunzhang/claude-code-inter-session.",
       "source": "./",
       "version": "0.1.4",
       "category": "productivity",
       "tags": ["messaging", "agents", "automation"],
-      "homepage": "https://github.com/yilunzhang/claude-code-inter-session",
+      "homepage": "https://github.com/agigante80/claude-code-hubbub",
       "license": "MIT"
     }
   ]
