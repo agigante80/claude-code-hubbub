@@ -24,7 +24,7 @@ Localhost only and Unix-only (macOS, Linux, WSL2) for now.
 
 ## Renamed from `inter-session`
 
-This project was called `inter-session` up to and including `0.1.4`. The
+This project was called `inter-session` up to and including `0.1.3`. The
 plugin is now **`hubbub`** and its skill is **`talk`**, so the command is
 `/hubbub:talk` rather than `/inter-session:inter-session`.
 
@@ -64,7 +64,7 @@ and let a new-path client elect a fresh one.
 
 This is a **maintained fork** of
 [yilunzhang/claude-code-inter-session](https://github.com/yilunzhang/claude-code-inter-session).
-Upstream last shipped `0.1.3` on 2026-05-24. This fork is at **`0.1.4`**:
+Upstream last shipped `0.1.3` on 2026-05-24. This fork is at **`0.1.5`**:
 everything below was developed here on top of that release and offered
 back upstream as pull requests, which are still open — so for now this
 fork is where the fixes live.
