@@ -364,16 +364,21 @@ spawned by Claude Code from `monitors.json`, not by this skill's
 to the listener pid, the same way the connect step does:
 
 ```
-Bash("python3 <bin>/list.py --self")     # prints listener_pid=<pid>
-Bash("kill <pid>")
+Bash("python3 <bin>/list.py --self")                      # prints listener_pid=<pid>
+Bash("kill <pid>; sleep 1.5; python3 <bin>/list.py --self")
 ```
 
-Wait ~1.5s, then confirm with `list.py --self`. The wait matters: after
-SIGTERM the monitor still has to unwind its event loop, send `bye`, and
-delete its state file, so an immediate check often still prints
-`name=…` and reads as a failed disconnect — leading to a second,
-needless kill. Reporting "disconnected" after a `TaskList()` that matched
-nothing leaves the session on the bus and reachable by peers.
+Put the wait and the re-check in the **same** `Bash` call as shown — a
+standalone foreground `sleep` is blocked in Claude Code. The wait
+matters: after SIGTERM the monitor still has to unwind its event loop,
+send `bye`, and delete its state file, so an immediate check often still
+prints `name=…` and reads as a failed disconnect, leading to a second and
+needless kill.
+
+**Success is the second command printing `not connected`.** Anything
+still showing `name=…` means the session is on the bus and reachable by
+peers — as does reporting "disconnected" after a `TaskList()` that
+matched nothing.
 
 ## auto-start — toggle plugin auto-start mode
 

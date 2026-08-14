@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 import errno
+import fcntl
 import json
 import os
 import re
@@ -135,12 +136,19 @@ def migrate_legacy_data_dir() -> None:
                 os.rename(legacy, new)
             elif not _drain_into(legacy, new):
                 return
-            # `uv venv` creates the dir with the default umask, so an
-            # install-deps-first machine would otherwise leave the bearer
-            # token sitting in a 0755 directory.
-            secure_dir(new)
+            # Marker, then symlink, then perms — in that order, and none of
+            # them able to abort the next. These run with live state already
+            # moved, so a raise here leaves `new` holding the token with no
+            # symlink *and* no marker, which is the one state the repair branch
+            # above cannot fix: legacy is neither a symlink, nor a dir, nor
+            # present, and the marker it looks for was never written.
             _mark_migrated(new)
             _link_legacy(legacy, new)
+            # `uv venv` creates the dir with the default umask, so an
+            # install-deps-first machine would otherwise leave the bearer
+            # token sitting in a 0755 directory. Cosmetic next to the above,
+            # hence last: secure_dir swallows its own errors.
+            secure_dir(new)
         elif not legacy.exists() and (new / MIGRATION_MARKER).is_file():
             # A previous run moved the directory but died — or lost a race —
             # before creating the symlink. Without repair an older build finds
@@ -358,13 +366,26 @@ def _free_aside_path(src: Path) -> Path | None:
 
 
 def _mark_migrated(new: Path) -> None:
+    """Best-effort, and deliberately non-fatal: failing to write the marker
+    must not stop the symlink going in, because the symlink is the half that
+    keeps old and new builds on one token."""
     marker = new / MIGRATION_MARKER
-    if not marker.exists():
-        marker.touch()
+    try:
+        if not marker.exists():
+            marker.touch()
+    except OSError as e:
+        _migration_warn(f"could not write {marker}: {e}")
 
 
 def _migration_warn(msg: str) -> None:
-    print(f"[inter-session] data-dir migration: {msg}", file=sys.stderr)
+    # Never raises. Once the aside rename succeeds the migration is past the
+    # point of no return, and an EPIPE/ENOSPC from a warning after that would
+    # otherwise reach the caller's rollback and try to move the token back into
+    # a directory that no longer exists.
+    try:
+        print(f"[inter-session] data-dir migration: {msg}", file=sys.stderr)
+    except OSError:
+        pass
 
 
 def data_dir() -> Path:
@@ -666,29 +687,35 @@ def _pidfile_meta_matches(
     return True
 
 
-def pid_is_our_client(pid: int) -> bool:
-    """True only if `pid` is alive AND looks like one of our monitors.
+def listener_lock_held(lock_path: Path) -> bool:
+    """True iff a live monitor holds this session's listener flock.
 
-    `safe_pid_alive` is a bare `kill(pid, 0)`. A monitor that was SIGKILLed
-    never ran its atexit cleanup, so the state file outlives it with a stale
-    pid — and after pid wraparound that pid is alive and belongs to something
-    else entirely. Anything that hands a pid to a human or an agent to `kill`
-    has to check identity, the way verify_server_identity does for the server.
+    The authority for "is this session connected", replacing a cmdline
+    substring check that could not tell one session's monitor from another's.
+    That mattered because `list.py --self` prints a pid the disconnect flow
+    tells an agent to `kill`: a SIGKILLed monitor leaves its state file behind,
+    and once that pid is reused — plausibly by *another session's* client.py —
+    a match on the string "client.py" would have aimed the kill at a live peer.
 
-    Conservative when psutil is missing or the process is unreadable: says no,
-    so a caller never kills on the strength of a guess.
+    The flock cannot be confused that way. It is held for the monitor's
+    lifetime, released by the kernel when it dies however it dies, and keyed by
+    the CC ancestor pid, so it answers about *this* session specifically.
     """
-    if not safe_pid_alive(pid):
-        return False
+    fd = None
     try:
-        import psutil
-    except ImportError:
-        return False
-    try:
-        cmdline = psutil.Process(pid).cmdline()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-        return False
-    return any("client.py" in str(a) for a in cmdline)
+        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False  # we took it, so nobody was holding it
+    except OSError as e:
+        if e.errno in (errno.EAGAIN, errno.EACCES):
+            return True
+        # Can't tell (no permission, path gone). Say "held": the alternative
+        # invites a caller to delete live state or spawn a duplicate.
+        return True
+    finally:
+        if fd is not None:
+            # Closing releases the lock if we took it — this is only a probe.
+            os.close(fd)
 
 
 def _cmdline_port_matches(cmdline: list[str], port: int | None) -> bool:
