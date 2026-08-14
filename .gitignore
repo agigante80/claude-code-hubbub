@@ -30,3 +30,10 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent working notes. Untracked by default: `.claude/memory/` holds notes on
+# how Andrea likes to work, and this is a public repo. Delete these two lines
+# to publish them — they are ordinary markdown and nothing depends on them
+# being ignored.
+.claude/memory/
+.claude/handoffs/
