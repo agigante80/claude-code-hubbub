@@ -124,19 +124,31 @@ def _resolve_ppid() -> int:
     return shared.resolve_listener_key()
 
 
-def _acquire_ppid_lock(ppid: int) -> Optional[int]:
-    """Return an open fd holding an exclusive lock for this ppid, or None if already held."""
+def _acquire_ppid_lock(ppid: int, attempts: int = 4) -> Optional[int]:
+    """Return an open fd holding an exclusive lock for this ppid, or None if
+    already held.
+
+    Retries briefly before concluding "already held". A real holder keeps the
+    lock for its whole lifetime, so a contention that clears in milliseconds is
+    someone *probing* — `list.py --self` takes it non-blocking to decide
+    staleness. Without the retry that probe can land in a starting monitor's
+    acquire and make it exit as a spurious duplicate, which `when: "always"`
+    makes routine by running status checks and session starts concurrently.
+    """
     shared.secure_dir(shared.clients_dir())
     lock_path = shared.client_lock_path(ppid)
-    fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return fd
-    except OSError as e:
-        os.close(fd)
-        if e.errno in (errno.EAGAIN, errno.EACCES):
-            return None
-        raise
+    for attempt in range(attempts):
+        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError as e:
+            os.close(fd)
+            if e.errno not in (errno.EAGAIN, errno.EACCES):
+                raise
+            if attempt < attempts - 1:
+                time.sleep(0.05)
+    return None
 
 
 def _read_existing_session_state(ppid: int) -> Optional[dict]:
@@ -248,7 +260,9 @@ class Client:
                     if self.verbose:
                         log.info("connect failed: %s", e)
                 except websockets.InvalidHandshake as e:
-                    _print_line(f"[inter-session] connected to a non-inter-session service on port {self.port}: {e}")
+                    _print_unless_auto(
+                        f"[inter-session] connected to a non-inter-session "
+                        f"service on port {self.port}: {e}", self.from_monitor)
                     return 1
                 except websockets.ConnectionClosed:
                     pass
@@ -275,10 +289,16 @@ class Client:
         # Defense-in-depth against port squatting: refuse to send the bearer
         # token to a process that doesn't claim to be our server.
         if not shared.verify_server_identity(self.host, self.port):
-            _print_line(
+            # Machine-wide condition, so with `when: "always"` it is one fact
+            # reported by every session on the box — including ones in repos
+            # whose user has never used hubbub. N copies of the same notice is
+            # noise, not signal; the session whose user actually asked to
+            # connect still gets it on stdout.
+            _print_unless_auto(
                 "[inter-session] server identity check failed "
                 f"(port {self.port} is held by something that isn't bin/server.py); "
-                "refusing to connect"
+                "refusing to connect",
+                self.from_monitor,
             )
             self._stop.set()
             return
@@ -320,18 +340,23 @@ class Client:
                         )
                         return  # main loop will reconnect with self.name = new_name
                     # Out of retries — surface and stop. Caller picks a new name.
-                    _print_line(
+                    _print_unless_auto(
                         f"[inter-session] name {self.name!r} taken after "
                         f"{self._collision_retries} retries; "
-                        f"run /hubbub:talk connect <other-name>"
+                        f"run /hubbub:talk connect <other-name>",
+                        self.from_monitor,
                     )
                     self._stop.set()
                     return
-                _print_line(f"[inter-session] hello rejected: {code} {welcome.get('message', '')}")
+                _print_unless_auto(
+                    f"[inter-session] hello rejected: {code} "
+                    f"{welcome.get('message', '')}", self.from_monitor)
                 self._stop.set()
                 return
             if welcome.get("op") != "welcome":
-                _print_line(f"[inter-session] unexpected hello response: {welcome}")
+                _print_unless_auto(
+                    f"[inter-session] unexpected hello response: {welcome}",
+                    self.from_monitor)
                 return
 
             _write_session_state(self.ppid, {
