@@ -1,4 +1,4 @@
-"""Tests for bin/auto_start.py — the /inter-session auto-start helper."""
+"""Tests for bin/auto_start.py — the /hubbub:talk auto-start helper."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-SCRIPT = REPO / "skills" / "inter-session" / "bin" / "auto_start.py"
+SCRIPT = REPO / "skills" / "talk" / "bin" / "auto_start.py"
 ALWAYS = "always"
-LAZY = "on-skill-invoke:inter-session"
+LAZY = "on-skill-invoke:talk"
 
 
 @pytest.fixture
@@ -21,9 +21,9 @@ def fake_plugin_root(tmp_path: Path) -> Path:
     monitors_dir.mkdir()
     (monitors_dir / "monitors.json").write_text(json.dumps([
         {
-            "name": "inter-session-client",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/inter-session/bin/client.py",
-            "description": "inter-session messages",
+            "name": "hubbub-client",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/talk/bin/client.py",
+            "description": "hubbub messages",
             "when": LAZY,
         }
     ], indent=2) + "\n")
@@ -124,7 +124,7 @@ class TestErrors:
         m.write_text(json.dumps([{"name": "other-monitor", "when": "always"}]))
         r = _run(["--status"], fake_plugin_root)
         assert r.returncode == 2
-        assert "inter-session-client" in r.stderr
+        assert "hubbub-client" in r.stderr
 
     def test_requires_one_of(self, fake_plugin_root: Path):
         # No flags → argparse should fail (mutually exclusive group, required=True)

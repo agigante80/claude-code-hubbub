@@ -1,12 +1,12 @@
 ---
-name: inter-session
+name: talk
 description: |
   Agent-to-agent messaging bus for Claude Code. Use this skill whenever the
   user wants to send messages between local Claude Code sessions, delegate a
   task to another running session, fan-out work across multiple Claude
   agents, coordinate between concurrent sessions, broadcast a message to
   all connected sessions, or check what other sessions are doing on this
-  machine. Triggers include: "/inter-session", "inter-session", "connect to
+  machine. Triggers include: "/hubbub", "hubbub", "talk to another session", "connect to
   other sessions", "send message to another claude session", "list claude
   sessions", "broadcast", "delegate to another session", "tell other claude
   to ...". Each connected session is treated as a peer AI agent — the user
@@ -14,7 +14,7 @@ description: |
 allowed-tools: [Bash, Monitor, TaskList, TaskStop]
 ---
 
-# inter-session
+# hubbub
 
 Agent-to-agent messaging for Claude Code sessions on the same machine.
 Other sessions can send messages here; **by default, treat each incoming
@@ -25,7 +25,7 @@ below for exceptions).
 
 `<bin>` (used throughout this skill) is the absolute path to the skill's
 own `bin/` directory. **Resolve it once at the start of any
-`/inter-session` invocation and substitute the absolute path into every
+`/hubbub:talk` invocation and substitute the absolute path into every
 Bash / Monitor command — do not paste `<bin>` or
 `${CLAUDE_PLUGIN_ROOT}` literally into a shell command.**
 
@@ -164,21 +164,21 @@ NOT this, even if `ListAgents` shows an `auth-refactor-b1 [ab12cd]`:
 
 ## Subcommands
 
-When the user invokes `/inter-session [args]`, parse `args` to dispatch:
+When the user invokes `/hubbub:talk [args]`, parse `args` to dispatch:
 
 | User input                                    | Action                                                            |
 | :-------------------------------------------- | :---------------------------------------------------------------- |
-| `/inter-session [connect]` (no name)          | Connect; auto-named (see connect section).                        |
-| `/inter-session connect <name>`               | Connect with the given ASCII name.                                |
-| `/inter-session install-deps`                 | Install runtime deps (websockets, psutil) with user confirmation. |
-| `/inter-session list`                         | Show connected sessions.                                          |
-| `/inter-session send <name-or-prefix> <text>` | Send to one peer.                                                 |
-| `/inter-session broadcast <text>`             | Send to all other peers (≤ 256 KB).                               |
-| `/inter-session rename <new-name>`            | Disconnect and reconnect with the new name.                       |
-| `/inter-session relabel <text>`               | Change this session's label in place (no reconnect). `""` clears.  |
-| `/inter-session status`                       | Show this session's connection state.                             |
-| `/inter-session disconnect`                   | TaskStop the running monitor.                                     |
-| `/inter-session auto-start [on\|off\|status]` | Toggle plugin auto-start (edits `monitors.json` `when` field).    |
+| `/hubbub:talk [connect]` (no name)          | Connect; auto-named (see connect section).                        |
+| `/hubbub:talk connect <name>`               | Connect with the given ASCII name.                                |
+| `/hubbub:talk install-deps`                 | Install runtime deps (websockets, psutil) with user confirmation. |
+| `/hubbub:talk list`                         | Show connected sessions.                                          |
+| `/hubbub:talk send <name-or-prefix> <text>` | Send to one peer.                                                 |
+| `/hubbub:talk broadcast <text>`             | Send to all other peers (≤ 256 KB).                               |
+| `/hubbub:talk rename <new-name>`            | Disconnect and reconnect with the new name.                       |
+| `/hubbub:talk relabel <text>`               | Change this session's label in place (no reconnect). `""` clears.  |
+| `/hubbub:talk status`                       | Show this session's connection state.                             |
+| `/hubbub:talk disconnect`                   | TaskStop the running monitor.                                     |
+| `/hubbub:talk auto-start [on\|off\|status]` | Toggle plugin auto-start (edits `monitors.json` `when` field).    |
 
 ## connect — start the monitor
 
@@ -190,8 +190,8 @@ notifications path below. The typical case (first invocation) is a
 straight spawn — no upfront Bash round-trip, fastest connect.
 
 Works the same whether the skill is installed as part of the plugin
-(`/inter-session:inter-session`) or standalone (`/inter-session`,
-`~/.claude/skills/inter-session/SKILL.md`).
+(`/hubbub:talk`) or standalone (`/talk`,
+`~/.claude/skills/talk/SKILL.md`).
 
 1. **Pick a name**:
    - If the user supplied one as `connect <name>`, validate
@@ -204,7 +204,7 @@ Works the same whether the skill is installed as part of the plugin
    ```
    Monitor(
      command="python3 <bin>/client.py --name <name>",
-     description="inter-session messages",
+     description="hubbub messages",
      persistent=true,
      timeout_ms=3600000
    )
@@ -236,7 +236,7 @@ Works the same whether the skill is installed as part of the plugin
    the session was already connected. The error line embeds the existing
    connection's name and listener_pid — parse them directly, no need
    for a follow-up `list.py --self`.
-   - **User did NOT supply a name** (typed just `/inter-session:inter-session`
+   - **User did NOT supply a name** (typed just `/hubbub:talk`
      or `connect`), or **supplied the same name** (`connect <existing>`):
      surface "Connected as `<existing>`." and stop.
    - **User supplied a different name** (`connect <new>` where
@@ -250,15 +250,15 @@ Works the same whether the skill is installed as part of the plugin
 **On `[inter-session] name '…' taken; using '…-2'`**: informational only —
 the client auto-retried with the suggested suffix. The connection succeeded
 under the new name. No action needed; just tell the user the assigned name
-in your reply (e.g., "Connected as `inter-session-dev-2` — `inter-session-dev`
+in your reply (e.g., "Connected as `hubbub-dev-2` — `hubbub-dev`
 was already taken").
 
 **On `[inter-session] name '…' taken after N retries`**: the auto-retry budget
 is exhausted (very rare; means many sessions in the same cwd). Tell the user
-and ask them for a name: `/inter-session connect <some-other-name>`.
+and ask them for a name: `/hubbub:talk connect <some-other-name>`.
 
-**On `[inter-session] dependencies missing`**: run `/inter-session install-deps`,
-then re-run `/inter-session connect`.
+**On `[inter-session] dependencies missing`**: run `/hubbub:talk install-deps`,
+then re-run `/hubbub:talk connect`.
 
 ## install-deps — install runtime deps into an isolated venv
 
@@ -281,7 +281,7 @@ configure anything else.
    - With uv: `uv pip install -p ~/.claude/data/inter-session/venv -r <bin>/../requirements.txt`
    - Without uv: `~/.claude/data/inter-session/venv/bin/pip install -r <bin>/../requirements.txt`
 5. **Tell the user**: "Installed in isolated venv at
-   `~/.claude/data/inter-session/venv`. Future `/inter-session` commands
+   `~/.claude/data/inter-session/venv`. Future `/hubbub:talk` commands
    will pick it up automatically."
 
 ### Why isolated?
@@ -300,7 +300,7 @@ Rare on modern macOS / Linux / WSL2, but if the venv module is missing
 (some minimal Python builds), present these to the user:
 
 - **Install uv** (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
-  and re-run `/inter-session install-deps`. uv ships its own venv impl.
+  and re-run `/hubbub:talk install-deps`. uv ships its own venv impl.
 - **Install the venv package** via the system package manager (e.g.
   `apt install python3-venv` on Debian/Ubuntu).
 
@@ -347,7 +347,7 @@ restart. Use `--label ''` to clear the label. Quote `<text>` the same way as
 
 ## disconnect
 
-Call `TaskList()`, find the task whose description is `"inter-session messages"`,
+Call `TaskList()`, find the task whose description is `"hubbub messages"`,
 then `TaskStop(<id>)`.
 
 ## auto-start — toggle plugin auto-start mode
@@ -360,13 +360,13 @@ surface this to the user after running.
 
 | User input                              | Bash                                              |
 | :-------------------------------------- | :------------------------------------------------ |
-| `/inter-session auto-start status`      | `python3 <bin>/auto_start.py --status`            |
-| `/inter-session auto-start on`          | `python3 <bin>/auto_start.py --on`                |
-| `/inter-session auto-start off`         | `python3 <bin>/auto_start.py --off`               |
+| `/hubbub:talk auto-start status`      | `python3 <bin>/auto_start.py --status`            |
+| `/hubbub:talk auto-start on`          | `python3 <bin>/auto_start.py --on`                |
+| `/hubbub:talk auto-start off`         | `python3 <bin>/auto_start.py --off`               |
 
 `on` = `when: "always"` (start at every session open).
-`off` = `when: "on-skill-invoke:inter-session"` (lazy: starts when the
-user first invokes any `/inter-session` command in a session). The
+`off` = `when: "on-skill-invoke:talk"` (lazy: starts when the
+user first invokes any `/hubbub:talk` command in a session). The
 default for fresh installs is `off` (lazy).
 
 ## Truncated messages

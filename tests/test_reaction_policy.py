@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SKILL = (REPO / "skills" / "inter-session" / "SKILL.md").read_text()
+SKILL = (REPO / "skills" / "talk" / "SKILL.md").read_text()
 
 
 class TestFrontmatter:
     def test_name(self):
-        assert "name: inter-session" in SKILL
+        assert "name: talk" in SKILL
 
     def test_allowed_tools(self):
         assert "allowed-tools" in SKILL
@@ -22,7 +22,7 @@ class TestSubcommands:
     def test_dispatch_table_has_all_subcommands(self):
         for sub in ("connect", "install-deps", "list", "send", "broadcast",
                     "rename", "relabel", "status", "disconnect"):
-            assert f"`/inter-session {sub}" in SKILL or f"`/inter-session [args]" in SKILL
+            assert f"`/hubbub:talk {sub}" in SKILL or f"`/hubbub:talk [args]" in SKILL
 
 
 class TestReactionPolicy:
@@ -126,7 +126,7 @@ class TestInstallDepsUx:
 class TestDedupGuard:
     def test_tasklist_check_in_connect(self):
         assert "TaskList()" in SKILL
-        assert '"inter-session messages"' in SKILL
+        assert '"hubbub messages"' in SKILL
 
 
 class TestNameValidation:
@@ -149,6 +149,6 @@ class TestTruncationHandling:
 
     def test_documented_rotation_matches_the_code(self):
         """The doc quotes concrete rotation numbers; keep them true."""
-        shared = (REPO / "skills" / "inter-session" / "bin" / "shared.py").read_text()
+        shared = (REPO / "skills" / "talk" / "bin" / "shared.py").read_text()
         assert "MESSAGES_LOG_MAX_BYTES = 50 * 1024 * 1024" in shared
         assert "MESSAGES_LOG_BACKUPS = 5" in shared

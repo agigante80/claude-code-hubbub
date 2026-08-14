@@ -4,7 +4,7 @@
      width="900" height="520"
      role="img"
      aria-label="Two Claude Code sessions iterating on a rate-limiter via inter-session">
-  <title>inter-session demo: TDD-style iterative loop, 5 rounds</title>
+  <title>hubbub demo: TDD-style iterative loop, 5 rounds</title>
   <desc>The user kicks off the impl session with a request to TDD a rate-limiter with the rev session. Impl forwards versions via send.py; rev runs adversarial pytest cases and replies. After 5 rounds the suite is clean and impl reports back to the user.</desc>
 
   <style>
@@ -82,7 +82,7 @@
 
   <rect class="bg" width="900" height="520"/>
 
-  <text class="topTitle" x="450" y="28" text-anchor="middle">user → impl session → rev session — TDD-style iterative loop via inter-session (illustration only)</text>
+  <text class="topTitle" x="450" y="28" text-anchor="middle">user → impl session → rev session — TDD-style iterative loop via hubbub (illustration only)</text>
 
   <!-- Left pane: impl session -->
   <g transform="translate(20, 50)">

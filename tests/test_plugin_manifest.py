@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SKILL_DIR = REPO / "skills" / "inter-session"
+SKILL_DIR = REPO / "skills" / "talk"
 BIN_DIR = SKILL_DIR / "bin"
 
 
 class TestPluginJson:
     def test_loads(self):
         cfg = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
-        assert cfg["name"] == "inter-session"
+        assert cfg["name"] == "hubbub"
         assert cfg["monitors"] == "./monitors/monitors.json"
 
     def test_no_explicit_skills_key(self):
@@ -56,18 +56,18 @@ class TestMonitorsJson:
         assert isinstance(monitors, list)
         assert len(monitors) == 1
         m = monitors[0]
-        assert m["name"] == "inter-session-client"
-        assert m["description"] == "inter-session messages"
-        assert m["when"] in ("always", "on-skill-invoke:inter-session")
-        assert "${CLAUDE_PLUGIN_ROOT}/skills/inter-session/bin/client.py" in m["command"]
+        assert m["name"] == "hubbub-client"
+        assert m["description"] == "hubbub messages"
+        assert m["when"] in ("always", "on-skill-invoke:talk")
+        assert "${CLAUDE_PLUGIN_ROOT}/skills/talk/bin/client.py" in m["command"]
 
     def test_default_when_is_lazy(self):
-        """The default ships as 'on-skill-invoke:inter-session' — sessions
+        """The default ships as 'on-skill-invoke:talk' — sessions
         that never use the bus pay nothing. Users who want always-on can
-        flip with `/inter-session auto-start on`.
+        flip with `/hubbub:talk auto-start on`.
         """
         m = json.loads((REPO / "monitors" / "monitors.json").read_text())[0]
-        assert m["when"] == "on-skill-invoke:inter-session"
+        assert m["when"] == "on-skill-invoke:talk"
 
     def test_command_works_in_plugin_dir_mode(self):
         """`--plugin-dir` mode does NOT run the userConfig prompt, so the
@@ -112,12 +112,12 @@ class TestSkillMdLocation:
     def test_skill_md_has_frontmatter_name(self):
         first = (SKILL_DIR / "SKILL.md").read_text().splitlines()
         assert first[0] == "---"
-        assert "name: inter-session" in "\n".join(first[:10])
+        assert "name: talk" in "\n".join(first[:10])
 
 
 class TestBinScriptsExist:
     """bin/ lives inside the skill directory so the skill is self-contained
-    (users can copy/symlink skills/inter-session/ wherever and it works)."""
+    (users can copy/symlink skills/talk/ wherever and it works)."""
 
     def test_client_py(self):
         assert (BIN_DIR / "client.py").is_file()
@@ -151,5 +151,5 @@ class TestRequirements:
 
     def test_dev_deps_inherit_runtime(self):
         dev = (REPO / "requirements-dev.txt").read_text()
-        assert "-r skills/inter-session/requirements.txt" in dev
+        assert "-r skills/talk/requirements.txt" in dev
         assert "pytest" in dev

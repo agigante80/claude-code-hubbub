@@ -385,7 +385,7 @@ class TestFindCcAncestorPidMatching:
         """The core invariant: two background sessions share a supervisor
         ancestor but each has its own bg-spare. They must resolve to
         DIFFERENT pids so they don't collide on the ppid dedup flock —
-        otherwise the second `/inter-session connect` exits with `another
+        otherwise the second `/hubbub:talk connect` exits with `another
         monitor for this session is already running`."""
         import psutil
         tree = {

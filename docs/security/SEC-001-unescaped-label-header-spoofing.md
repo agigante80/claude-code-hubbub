@@ -3,7 +3,7 @@
 | Field | Value |
 | :--- | :--- |
 | **Status** | Open |
-| **Component** | `skills/inter-session/bin` (message rendering) |
+| **Component** | `skills/talk/bin` (message rendering) |
 | **Category** | Output encoding / injection (sender-attribution spoofing) |
 | **Reporter** | Security review, 2026-07-12 |
 | **Initial severity (raw finding)** | HIGH |
@@ -12,10 +12,10 @@
 
 ## Affected code
 
-- `skills/inter-session/bin/client.py:55,57,59,61` — `_format_msg` interpolates `from_label` raw.
-- `skills/inter-session/bin/list.py:121,127` — `list` table prints `label` raw.
-- Root cause: `skills/inter-session/bin/shared.py:120-134` — `validate_label` rejects only Unicode categories `C*`/`Z*` (plus a 60-codepoint cap and an explicit allow for ASCII space); it permits the structural characters `"` (Po), `[` (Ps), `]` (Pe), `=` (Sm), `:` (Po).
-- Server stamps the raw label into every outgoing message: `skills/inter-session/bin/server.py:551,597` (`"from_label": state.label`).
+- `skills/talk/bin/client.py:55,57,59,61` — `_format_msg` interpolates `from_label` raw.
+- `skills/talk/bin/list.py:121,127` — `list` table prints `label` raw.
+- Root cause: `skills/talk/bin/shared.py:120-134` — `validate_label` rejects only Unicode categories `C*`/`Z*` (plus a 60-codepoint cap and an explicit allow for ASCII space); it permits the structural characters `"` (Po), `[` (Ps), `]` (Pe), `=` (Sm), `:` (Po).
+- Server stamps the raw label into every outgoing message: `skills/talk/bin/server.py:551,597` (`"from_label": state.label`).
 
 ## Description
 

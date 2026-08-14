@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILL_DIR = REPO_ROOT / "skills" / "inter-session"
+SKILL_DIR = REPO_ROOT / "skills" / "talk"
 # Put the skill dir first so `from bin import ...` resolves to
 # <skill-dir>/bin/, where the runtime now lives.
 sys.path.insert(0, str(SKILL_DIR))

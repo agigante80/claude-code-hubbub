@@ -2,7 +2,7 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PYTEST := $(VENV)/bin/pytest
 DEV_REQS := requirements-dev.txt
-RUNTIME_REQS := skills/inter-session/requirements.txt
+RUNTIME_REQS := skills/talk/requirements.txt
 
 # Sentinel file marks "deps are up-to-date with the reqs files". `make`
 # rebuilds it whenever either reqs file is newer (or it's missing), so

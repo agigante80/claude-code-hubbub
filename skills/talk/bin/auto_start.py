@@ -1,13 +1,13 @@
-"""Toggle the inter-session plugin monitor's auto-start behavior.
+"""Toggle the hubbub plugin monitor's auto-start behavior.
 
-Edits the `when` field of the inter-session-client monitor in the
+Edits the `when` field of the hubbub-client monitor in the
 plugin's `monitors/monitors.json` atomically. The script self-locates
 relative to its own path (no env var needed); CLAUDE_PLUGIN_ROOT is
 honored as an override if set.
 
 Modes:
   always                          start at every CC session open
-  on-skill-invoke:inter-session   start when /inter-session is first invoked
+  on-skill-invoke:talk           start when /hubbub:talk is first invoked
 
 Changes take effect on `/reload-plugins` or the next CC session.
 """
@@ -22,13 +22,13 @@ import tempfile
 from pathlib import Path
 
 ALWAYS = "always"
-LAZY = "on-skill-invoke:inter-session"
-MONITOR_NAME = "inter-session-client"
+LAZY = "on-skill-invoke:talk"
+MONITOR_NAME = "hubbub-client"
 
 
 def _resolve_monitors_path() -> Path:
     # monitors.json lives at <plugin-root>/monitors/monitors.json.
-    # This script lives at <plugin-root>/skills/inter-session/bin/auto_start.py,
+    # This script lives at <plugin-root>/skills/talk/bin/auto_start.py,
     # so the plugin root is FOUR parents up from this file.
     #
     # Resolution order:
@@ -95,7 +95,7 @@ def cmd_status() -> int:
     if when == ALWAYS:
         label = "ON  (auto-start at every session)"
     elif when == LAZY:
-        label = "OFF (lazy: starts on first /inter-session invocation)"
+        label = "OFF (lazy: starts on first /hubbub:talk invocation)"
     else:
         label = f"CUSTOM ({when})"
     print(f"auto-start: {label}")

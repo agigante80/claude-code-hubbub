@@ -1,7 +1,7 @@
 # Security tickets
 
 Findings from the 2026-07-12 security review of the runtime source
-(`skills/inter-session/bin/*.py`). Threat model per the project README: single
+(`skills/talk/bin/*.py`). Threat model per the project README: single
 user, single machine, same-UID code trusted; peer sessions are semi-trusted
 (another session's LLM may itself be prompt-injected), and the code deliberately
 tries to keep the receiving-session notification line's sender attribution
