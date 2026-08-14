@@ -175,6 +175,19 @@ class TestDependencyGuard:
             )
             assert "_MISSING_DEP" in src, name
 
+    def test_psutil_is_guarded_too(self):
+        """requirements.txt lists psutil, and without it resolve_listener_key
+        falls back to getppid() — which the monitor and the helper CLIs, being
+        siblings under different subshells, compute differently. The ppid flock
+        then stops deduping and self-discovery breaks, with no error anywhere.
+        A half-installed runtime has to fail loudly instead."""
+        for name in self.ENTRY_POINTS:
+            src = (REPO / "skills" / "talk" / "bin" / name).read_text()
+            head = src.split("_MISSING_DEP = _e")[0]
+            assert "import psutil" in head, (
+                f"{name}: psutil missing from the guarded import block"
+            )
+
     def test_no_dead_reimport_in_main_block(self):
         for name in self.ENTRY_POINTS:
             src = (REPO / "skills" / "talk" / "bin" / name).read_text()

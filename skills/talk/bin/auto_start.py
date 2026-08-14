@@ -101,7 +101,10 @@ def _set_optout(off: bool) -> None:
     is not enough."""
     path = shared.autostart_optout_path()
     if off:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # secure_dir, not a bare mkdir: on a fresh machine whose first hubbub
+        # command is `auto-start off` this creates the data dir, and the
+        # bearer token gets minted inside it later.
+        shared.secure_dir(path.parent)
         path.touch()
     else:
         path.unlink(missing_ok=True)
@@ -132,20 +135,24 @@ def cmd_status() -> int:
 
 
 def cmd_set(target: str) -> int:
+    # Durable flag first. _resolve_monitors_path() exits when the plugin file
+    # is missing and _atomic_write fails on a read-only plugin dir — and a
+    # plugin directory in flux is precisely the case this flag exists for, so
+    # gating it behind that write would drop the setting exactly when it
+    # matters most.
+    _set_optout(target == LAZY)
     path = _resolve_monitors_path()
     monitors = _load(path)
     entry = _find_entry(monitors)
     prev = entry.get("when", "always")
     if prev == target:
-        # Still reassert the durable flag: a plugin update can restore the
-        # shipped `when` while leaving the data-dir opt-out stale, or vice
-        # versa, and `--on`/`--off` should always end in a coherent state.
-        _set_optout(target == LAZY)
+        # The durable flag was already reasserted above, which matters: a
+        # plugin update can restore the shipped `when` while leaving the
+        # data-dir opt-out stale, or vice versa.
         print(f"auto-start: already {target!r}; no change")
         return 0
     entry["when"] = target
     _atomic_write(path, json.dumps(monitors, indent=2) + "\n")
-    _set_optout(target == LAZY)
     print(f"auto-start: {prev!r} -> {target!r}")
     print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
     return 0
