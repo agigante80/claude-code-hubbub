@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 import sys
@@ -86,8 +87,12 @@ class TestSet:
         data = json.loads((fake_plugin_root / "monitors" / "monitors.json").read_text())
         assert data[0]["when"] == LAZY
 
-    def test_no_change_when_already_target(self, fake_plugin_root: Path):
-        r = _run(["--off"], fake_plugin_root)
+    def test_no_change_when_already_target(self, fake_plugin_root: Path, tmp_path: Path):
+        # Twice: the first run still creates the durable flag (a real change),
+        # so "no change" is only true once both halves already agree.
+        data_dir = tmp_path / "data"
+        _run(["--off"], fake_plugin_root, data_dir=data_dir)
+        r = _run(["--off"], fake_plugin_root, data_dir=data_dir)
         assert r.returncode == 0
         assert "no change" in r.stdout
         # File contents preserved
@@ -162,12 +167,13 @@ class TestDurableOptOut:
     def test_off_is_reasserted_when_when_already_matches(
             self, fake_plugin_root: Path, tmp_path: Path):
         """A plugin update restores the shipped `when` but leaves the data dir
-        alone, so the two can disagree. `--off` must converge them even when it
-        reports "no change"."""
+        alone, so the two can disagree. `--off` must converge them even when
+        `when` already matches — and must not call that "no change"."""
         data = tmp_path / "data"
         r = _run(["--off"], fake_plugin_root, data_dir=data)   # fixture ships LAZY
-        assert "no change" in r.stdout
+        assert r.returncode == 0, r.stderr
         assert (data / "autostart-off").exists()
+        assert "no change" not in r.stdout
 
     def test_status_flags_an_update_that_undid_the_optout(
             self, fake_plugin_root: Path, tmp_path: Path):
@@ -181,3 +187,87 @@ class TestDurableOptOut:
         r = _run(["--status"], fake_plugin_root, data_dir=data)
         assert "opt-out" in r.stdout
         assert "wins" in r.stdout
+
+
+class TestPartialFailure:
+    """The two halves — the plugin manifest and the durable data-dir flag —
+    must be independent. Ordering them only chooses which one silently gets
+    dropped when the other fails."""
+
+    def test_missing_manifest_does_not_touch_durable_state(self, tmp_path: Path):
+        """A standalone-skill copy has no monitors.json and governs no plugin
+        monitor, so it must not reach over and flip the flag a plugin install
+        reads. `--on` doing so would re-enable the plugin's always-on monitor
+        and then exit 2, reporting failure.
+
+        The copy is real, not a bogus CLAUDE_PLUGIN_ROOT: resolution falls back
+        to walking up from the script, so pointing the env var at nothing just
+        lands on this repo's own monitors.json.
+        """
+        standalone = tmp_path / "install" / "skills" / "talk"
+        standalone.parent.mkdir(parents=True)
+        shutil.copytree(REPO / "skills" / "talk", standalone)
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "autostart-off").touch()
+        r = subprocess.run(
+            [sys.executable, str(standalone / "bin" / "auto_start.py"), "--on"],
+            capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
+                 "HUBBUB_DATA_DIR": str(data)},
+        )
+        assert r.returncode == 2, r.stdout
+        assert (data / "autostart-off").exists(), (
+            "durable opt-out was cleared by a command that reported failure"
+        )
+
+    def test_unwritable_manifest_still_records_the_optout(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """The durable flag is the half that survives /plugin update, so a
+        read-only plugin dir must not cost us the setting."""
+        data = tmp_path / "data"
+        monitors = fake_plugin_root / "monitors"
+        monitors.chmod(0o500)
+        try:
+            r = _run(["--off"], fake_plugin_root, data_dir=data)
+        finally:
+            monitors.chmod(0o700)
+        assert (data / "autostart-off").exists()
+        # Off is in force via the flag alone, so this is a success.
+        assert r.returncode == 0, r.stderr
+
+    def test_unwritable_data_dir_still_applies_the_manifest(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """Mirror-write failure must not cost us the manifest edit, which is
+        what CC actually reads at session open."""
+        m = fake_plugin_root / "monitors" / "monitors.json"
+        entries = json.loads(m.read_text())
+        entries[0]["when"] = ALWAYS
+        m.write_text(json.dumps(entries, indent=2) + "\n")
+        blocked = tmp_path / "blocked"
+        blocked.mkdir(mode=0o500)
+        try:
+            r = _run(["--off"], fake_plugin_root, data_dir=blocked / "data")
+            when = json.loads(m.read_text())[0]["when"]
+        finally:
+            blocked.chmod(0o700)
+        assert when == LAZY, "manifest edit was skipped because the mirror failed"
+        assert "could not update" in r.stderr
+        # Off is genuinely in force through `when` alone, so this succeeded.
+        assert r.returncode == 0
+
+    def test_reconcile_is_not_reported_as_no_change(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """Post-upgrade shape: monitors.json ships `always`, the durable
+        opt-out is still there. `--on` really does change state."""
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "autostart-off").touch()
+        m = fake_plugin_root / "monitors" / "monitors.json"
+        entries = json.loads(m.read_text())
+        entries[0]["when"] = ALWAYS
+        m.write_text(json.dumps(entries, indent=2) + "\n")
+        r = _run(["--on"], fake_plugin_root, data_dir=data)
+        assert r.returncode == 0, r.stderr
+        assert "no change" not in r.stdout
+        assert not (data / "autostart-off").exists()

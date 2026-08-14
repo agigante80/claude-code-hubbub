@@ -156,7 +156,7 @@ def migrate_legacy_data_dir() -> None:
         # the live directory, say, not just ENOENT. With `when: "always"`
         # every session open races every other one, so decide by the state on
         # disk rather than by which error we caught.
-        if not _legacy_points_at(legacy, new):
+        if not _migration_complete(legacy, new):
             _migration_warn(f"could not migrate {legacy} → {new}: {e}")
 
 
@@ -232,6 +232,19 @@ def _drain_into(src: Path, dst: Path) -> bool:
 def _legacy_points_at(legacy: Path, new: Path) -> bool:
     try:
         return legacy.is_symlink() and legacy.resolve() == new.resolve()
+    except OSError:
+        return False
+
+
+def _migration_complete(legacy: Path, new: Path) -> bool:
+    """The full end state, symlink *and* marker — not just the symlink.
+
+    `_mark_migrated` can fail on its own (read-only mount, ENOSPC, stale perms)
+    while the symlink is already correct. Judging by the symlink alone would
+    suppress that warning, and the marker never being written means the
+    "repair a lost symlink" branch can never fire for this install again."""
+    try:
+        return _legacy_points_at(legacy, new) and (new / MIGRATION_MARKER).is_file()
     except OSError:
         return False
 
