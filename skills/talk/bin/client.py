@@ -170,6 +170,16 @@ def _print_unless_auto(line: str, from_monitor: bool) -> None:
     """Housekeeping notices that are worth a notification when the *user* asked
     to connect, and pure noise when CC auto-started the monitor.
 
+    **The rule, so it stops getting re-litigated:** route a line here only if
+    it reports a *normal outcome* — auto-named from cwd, a duplicate monitor,
+    deps not installed yet. A line that reports a **fault preventing the
+    connection** stays on stdout even when auto-started, because with
+    `when: "always"` the user no longer runs `/hubbub:talk connect`, so stderr
+    is somewhere nobody looks. That is the whole point of always-on, and it is
+    exactly why the port-squatter check must not be quiet: it is the
+    defense-in-depth against a localhost squatter harvesting the bearer token,
+    and silencing it means a squatted port produces no signal anywhere.
+
     With `when: "always"` this runs in every session on the machine, including
     ones whose user has never used hubbub — so a stdout line here means a
     notification before they have typed anything. stderr still reaches the
@@ -260,9 +270,9 @@ class Client:
                     if self.verbose:
                         log.info("connect failed: %s", e)
                 except websockets.InvalidHandshake as e:
-                    _print_unless_auto(
+                    _print_line(
                         f"[inter-session] connected to a non-inter-session "
-                        f"service on port {self.port}: {e}", self.from_monitor)
+                        f"service on port {self.port}: {e}")
                     return 1
                 except websockets.ConnectionClosed:
                     pass
@@ -289,16 +299,15 @@ class Client:
         # Defense-in-depth against port squatting: refuse to send the bearer
         # token to a process that doesn't claim to be our server.
         if not shared.verify_server_identity(self.host, self.port):
-            # Machine-wide condition, so with `when: "always"` it is one fact
-            # reported by every session on the box — including ones in repos
-            # whose user has never used hubbub. N copies of the same notice is
-            # noise, not signal; the session whose user actually asked to
-            # connect still gets it on stdout.
-            _print_unless_auto(
+            # Loud even when auto-started. It only fires when the port is
+            # held by something that is not our server — a fault, not routine
+            # housekeeping — and it is the token-harvesting defense. N sessions
+            # each reporting a genuinely squatted port beats no session
+            # reporting it at all.
+            _print_line(
                 "[inter-session] server identity check failed "
                 f"(port {self.port} is held by something that isn't bin/server.py); "
-                "refusing to connect",
-                self.from_monitor,
+                "refusing to connect"
             )
             self._stop.set()
             return
@@ -354,15 +363,16 @@ class Client:
                     )
                     self._stop.set()
                     return
-                _print_unless_auto(
+                # `unauthorized` here is the documented symptom of a forked
+                # token namespace, which is a fault, not housekeeping.
+                _print_line(
                     f"[inter-session] hello rejected: {code} "
-                    f"{welcome.get('message', '')}", self.from_monitor)
+                    f"{welcome.get('message', '')}")
                 self._stop.set()
                 return
             if welcome.get("op") != "welcome":
-                _print_unless_auto(
-                    f"[inter-session] unexpected hello response: {welcome}",
-                    self.from_monitor)
+                _print_line(
+                    f"[inter-session] unexpected hello response: {welcome}")
                 return
 
             _write_session_state(self.ppid, {

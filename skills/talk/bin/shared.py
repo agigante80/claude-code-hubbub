@@ -94,6 +94,46 @@ def default_data_dir() -> Path:
     return Path.home() / ".claude" / "data" / "hubbub"
 
 
+def _migration_lock_path() -> Path:
+    # Beside the two directories, not inside either — one of them gets renamed.
+    return Path.home() / ".claude" / "data" / ".hubbub-migration.lock"
+
+
+def _acquire_migration_lock(timeout_s: float = 5.0) -> int | None:
+    """Serialize the migration across processes, or None if we can't.
+
+    Every entry-point runs the migration at startup and `monitors.json` ships
+    `when: "always"`, so N sessions opening together enter this concurrently —
+    and `_drain_into` is reached whenever `hubbub/` already exists, which is
+    the documented common upgrade case (`install-deps` created `hubbub/venv`
+    first). Every other race here is handled by re-checking disk state, which
+    works only because a winner never moves state *backwards*. `_rollback`
+    broke that: a loser rolling back could rename a winner's already-migrated
+    `clients/` and `messages.log` back into the legacy dir, which the winner
+    then parks wholesale as `inter-session.pre-rename` — every connected
+    session loses its state file and reports "not connected".
+
+    Polling LOCK_NB rather than blocking, like `spawn._acquire_election_lock`:
+    a stuck holder must never wedge every session on the machine at open.
+    """
+    path = _migration_lock_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o600)
+    except OSError:
+        return None
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                return None
+            time.sleep(0.02)
+
+
 def migrate_legacy_data_dir() -> None:
     """One-time `inter-session` → `hubbub` move, leaving a symlink behind.
 
@@ -119,7 +159,18 @@ def migrate_legacy_data_dir() -> None:
         return
     new = default_data_dir()
     legacy = legacy_data_dir()
+    if _migration_complete(legacy, new):
+        # The overwhelmingly common path once migrated: don't make every
+        # session open contend for a lock to discover there is nothing to do.
+        return
+    lock_fd = _acquire_migration_lock()
+    if lock_fd is None:
+        # Another process holds it, or we cannot lock at all. Either way,
+        # racing it is what this lock exists to prevent.
+        return
     try:
+        if _migration_complete(legacy, new):
+            return  # a peer finished while we waited
         if legacy.is_symlink():
             if legacy.resolve() == new.resolve():
                 # Migrated by 0.2.0's first cut, which predates the marker.
@@ -180,6 +231,8 @@ def migrate_legacy_data_dir() -> None:
             # cannot fix, which is precisely what deserves a warning.
             return
         _migration_warn(f"could not migrate {legacy} → {new}: {e}")
+    finally:
+        os.close(lock_fd)
 
 
 # Regenerable artifacts: colliding copies of these can be set aside without
