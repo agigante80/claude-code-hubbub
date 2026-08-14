@@ -143,19 +143,15 @@ def migrate_legacy_data_dir() -> None:
             # no legacy path, recreates it as a real directory with its own
             # token, and the namespace forks silently.
             _link_legacy(legacy, new)
-    except FileNotFoundError:
-        # A concurrent starter finished the move between two of our checks.
-        # Every entry-point calls this at startup and simultaneous starts are
-        # normal here (a monitor and a `list.py`, or two CC sessions opening
-        # at once), so this is the expected shape of losing that race — not a
-        # failure, and not worth a warning that says one happened.
-        return
     except OSError as e:
-        # A peer finishing between two of our checks surfaces as whatever
-        # syscall we happened to be in — EISDIR from renaming a symlink onto
-        # the live directory, say, not just ENOENT. With `when: "always"`
-        # every session open races every other one, so decide by the state on
-        # disk rather than by which error we caught.
+        # One handler, deciding by the state on disk. A peer finishing between
+        # two of our checks surfaces as whatever syscall we happened to be in
+        # (ENOENT from a vanished source, EISDIR from renaming a symlink onto
+        # the live directory), and with `when: "always"` every session open
+        # races every other one. Special-casing FileNotFoundError as "benign"
+        # was wrong in the other direction too: it also fires on the late
+        # `os.rename(src, aside)`, where returning quietly would leave a
+        # half-drained real directory and call it success.
         if not _migration_complete(legacy, new):
             _migration_warn(f"could not migrate {legacy} → {new}: {e}")
 
@@ -211,6 +207,15 @@ def _drain_into(src: Path, dst: Path) -> bool:
             stuck.append(e.name)
     if stuck:
         _migration_warn(f"could not move {sorted(stuck)} out of {src}")
+        if set(stuck) - _DISPOSABLE:
+            # Live state that would not move. Setting it aside and symlinking
+            # anyway relocates the token out of the live path: the next client
+            # mints a fresh one and every peer still holding the old one gets
+            # `unauthorized` on reconnect. Stopping leaves the pre-existing
+            # (already imperfect) state instead of actively breaking the bus.
+            _migration_warn(f"leaving {src} in place; live state could not be "
+                            f"moved and must not be relocated behind the bus")
+            return False
     try:
         src.rmdir()
     except OSError:
@@ -223,9 +228,17 @@ def _drain_into(src: Path, dst: Path) -> bool:
             _migration_warn(f"{src} still holds entries and {aside} is taken; "
                             f"not replacing {src} with a symlink")
             return False
+        leftovers = {e.name for e in src.iterdir()}
         os.rename(src, aside)
-        _migration_warn(f"set {aside} aside so {src} could become a symlink; "
-                        f"review it before deleting")
+        if leftovers - _DISPOSABLE:
+            _migration_warn(f"set {aside} aside so {src} could become a "
+                            f"symlink; review it before deleting")
+        else:
+            # Only regenerable files — almost always the pre-rename venv,
+            # superseded by the one at the new path. Say what it is rather
+            # than sending every upgrading user off to audit a directory.
+            _migration_warn(f"superseded {sorted(leftovers)} moved to {aside}; "
+                            f"safe to delete")
     return True
 
 

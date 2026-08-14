@@ -445,7 +445,7 @@ class TestLegacyDataDirMigration:
         assert (self.new / "venv" / "bin").is_dir()
         aside = self.legacy.with_name("inter-session.pre-rename")
         assert (aside / "venv").is_dir()
-        assert "review it before deleting" in capsys.readouterr().err
+        assert "safe to delete" in capsys.readouterr().err
 
     def test_symlink_still_lands_when_legacy_is_repopulated_mid_move(self, monkeypatch):
         """An old build still running can recreate clients/ between the scan
@@ -489,8 +489,32 @@ class TestLegacyDataDirMigration:
         assert "leaving it alone" in capsys.readouterr().err
 
     def test_losing_the_race_is_silent(self, monkeypatch, capsys):
-        """Concurrent starts are normal (a monitor and a list.py). Losing the
-        race is the expected shape, not a failure to announce."""
+        """Concurrent starts are normal (a monitor and a list.py). A lost race
+        is judged by the end state, not by the errno we happened to catch: the
+        winner leaves a complete migration behind, so there is nothing to
+        report even though our own syscall failed."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+
+        def peer_wins(*a, **k):
+            # The winner completes while we are mid-syscall.
+            if not self.new.exists():
+                self.new.mkdir(parents=True)
+                (self.new / shared.MIGRATION_MARKER).touch()
+                for e in list(self.legacy.iterdir()):
+                    e.replace(self.new / e.name)
+                self.legacy.rmdir()
+                self.legacy.symlink_to(self.new)
+            raise FileNotFoundError(2, "No such file or directory")
+
+        monkeypatch.setattr(shared.os, "rename", peer_wins)
+        shared.migrate_legacy_data_dir()
+        assert capsys.readouterr().err == ""
+        assert self.legacy.is_symlink()
+
+    def test_a_real_failure_is_still_reported(self, monkeypatch, capsys):
+        """The flip side: an error that leaves nothing migrated must not be
+        waved through as a lost race."""
         self.legacy.mkdir(parents=True)
         (self.legacy / "token").write_text("live")
 
@@ -499,7 +523,7 @@ class TestLegacyDataDirMigration:
 
         monkeypatch.setattr(shared.os, "rename", vanish)
         shared.migrate_legacy_data_dir()
-        assert capsys.readouterr().err == ""
+        assert "could not migrate" in capsys.readouterr().err
 
     def test_live_state_collision_still_refuses(self, capsys):
         """Two real tokens means the fork already happened; picking a winner
@@ -549,27 +573,47 @@ class TestLegacyDataDirMigration:
         assert self.legacy.is_symlink()
         assert capsys.readouterr().err == ""
 
-    def test_partial_drain_still_reaches_the_symlink(self, monkeypatch, capsys):
-        """One entry failing to move must not abort before the symlink. A
-        half-drained legacy dir left as a real directory is the split namespace
-        the whole function exists to prevent, and the next run would see a live
-        collision and refuse for good."""
-        self.legacy.mkdir(parents=True)
-        (self.legacy / "token").write_text("live")
-        (self.legacy / "wedged").write_text("x")
-        self.new.mkdir(parents=True)
+    def _refuse(self, monkeypatch, name: str):
         real_rename = os.rename
 
         def refuse_one(src, dst):
-            if Path(src).name == "wedged":
+            if Path(src).name == name:
                 raise PermissionError(13, "Permission denied")
             return real_rename(src, dst)
 
         monkeypatch.setattr(shared.os, "rename", refuse_one)
+
+    def test_disposable_entry_stuck_still_reaches_the_symlink(self, monkeypatch, capsys):
+        """A regenerable entry that won't move must not abort before the
+        symlink: a half-drained legacy dir left as a real directory is the
+        split namespace this all exists to prevent."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "venv").mkdir()
+        self.new.mkdir(parents=True)
+        self._refuse(monkeypatch, "venv")
         shared.migrate_legacy_data_dir()
         assert self.legacy.is_symlink()
         assert (self.new / "token").read_text() == "live"
-        assert "wedged" in capsys.readouterr().err
+        assert "venv" in capsys.readouterr().err
+
+    def test_stuck_live_state_aborts_rather_than_relocating_the_token(
+            self, monkeypatch, capsys):
+        """The opposite call for live state. Setting the token aside and
+        symlinking anyway moves it out of the live path — the next client mints
+        a fresh one and every peer still holding the old one gets
+        `unauthorized`. Stopping leaves the imperfect state instead of actively
+        breaking a running bus."""
+        self.legacy.mkdir(parents=True)
+        (self.legacy / "token").write_text("live")
+        (self.legacy / "clients").mkdir()
+        self.new.mkdir(parents=True)
+        self._refuse(monkeypatch, "token")
+        shared.migrate_legacy_data_dir()
+        assert not self.legacy.is_symlink()
+        assert (self.legacy / "token").read_text() == "live"
+        assert not (self.legacy.with_name("inter-session.pre-rename")).exists()
+        assert "must not be relocated" in capsys.readouterr().err
 
     def test_env_override_suppresses_migration(self, tmp_path, monkeypatch):
         """An explicit data dir means the caller owns the layout; don't go

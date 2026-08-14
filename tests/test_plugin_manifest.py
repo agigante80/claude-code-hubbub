@@ -71,6 +71,14 @@ class TestMonitorsJson:
         m = json.loads((REPO / "monitors" / "monitors.json").read_text())[0]
         assert m["when"] == "always"
 
+    def test_command_passes_from_monitor(self):
+        """The durable auto-start opt-out hangs entirely off this flag: it is
+        how client.py tells "CC auto-started me at session open" from "the user
+        asked to connect". Drop it and `auto-start off` silently stops
+        suppressing the always-on monitor, with nothing failing anywhere."""
+        m = json.loads((REPO / "monitors" / "monitors.json").read_text())[0]
+        assert "--from-monitor" in m["command"]
+
     def test_command_works_in_plugin_dir_mode(self):
         """`--plugin-dir` mode does NOT run the userConfig prompt, so the
         monitor command must not depend on `${user_config.*}` substitution.
