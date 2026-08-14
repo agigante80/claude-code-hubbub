@@ -128,7 +128,7 @@ def cmd_status() -> int:
     if when == ALWAYS:
         label = "ON  (auto-start at every session)"
     elif when == LAZY:
-        label = "OFF (lazy: starts on first /hubbub:talk invocation)"
+        label = "OFF (no auto-start; /hubbub:talk connect still works)"
     else:
         label = f"CUSTOM ({when})"
     optout = shared.autostart_optout_path()

@@ -185,9 +185,15 @@ When the user invokes `/hubbub:talk [args]`, parse `args` to dispatch:
 Skip pre-checks. Pick a name, call `Monitor()`, done. If a monitor is
 already running for this session, `client.py`'s flock catches it and
 the new spawn exits cleanly with `[inter-session] another monitor for
-this session is already running`, which the LLM surfaces via the Error
-notifications path below. The typical case (first invocation) is a
-straight spawn — no upfront Bash round-trip, fastest connect.
+this session is already running`, which carries the existing name and
+listener_pid — step 3 below takes it from there.
+
+**Expect that error to be the normal outcome, not the edge case.** With
+auto-start on (the default), CC has already started a monitor at session
+open, and it auto-named from the cwd because `monitors.json` passes no
+`--name`. So `connect <name>` with a name of your own almost always lands
+in step 3's rename branch: stop the auto-started monitor, respawn with
+the requested name. That is the expected path, not a failure.
 
 Works the same whether the skill is installed as part of the plugin
 (`/hubbub:talk`) or standalone (`/talk`,
@@ -366,8 +372,11 @@ surface this to the user after running.
 | `/hubbub:talk auto-start off`         | `python3 <bin>/auto_start.py --off`               |
 
 `on` = `when: "always"` (start at every session open).
-`off` = `when: "on-skill-invoke:talk"` (lazy: starts when the
-user first invokes any `/hubbub:talk` command in a session).
+`off` = no auto-start at all: `when` goes to `on-skill-invoke:talk` *and*
+a durable opt-out is recorded under the data dir, so a plugin-started
+monitor exits immediately even if a later `/plugin update` restores the
+shipped `when`. Connecting still works — `/hubbub:talk connect` spawns
+the monitor itself and is unaffected by the opt-out.
 
 **The default for fresh installs is `on`.** A session that hasn't joined
 the bus can't be reached by a peer, and with lazy start it only joined
