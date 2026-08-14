@@ -21,8 +21,14 @@ BIN_DIR = REPO / "skills" / "talk" / "bin"
 
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
+    """Deliberately shadows conftest's fixture using the *legacy* env spelling,
+    so the back-compat path in shared.env() stays exercised. HUBBUB_DATA_DIR
+    must still be cleared: it takes precedence, so a developer with it exported
+    — the documented name, and the obvious thing to export while debugging the
+    migration — would otherwise point these tests at the real data dir."""
     d = tmp_path / "inter-session"
     monkeypatch.setenv("INTER_SESSION_DATA_DIR", str(d))
+    monkeypatch.delenv("HUBBUB_DATA_DIR", raising=False)
     return d
 
 

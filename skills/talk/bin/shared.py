@@ -136,13 +136,13 @@ def migrate_legacy_data_dir() -> None:
             elif not _drain_into(legacy, new):
                 return
             _mark_migrated(new)
-            legacy.symlink_to(new)
+            _link_legacy(legacy, new)
         elif not legacy.exists() and (new / MIGRATION_MARKER).is_file():
             # A previous run moved the directory but died — or lost a race —
             # before creating the symlink. Without repair an older build finds
             # no legacy path, recreates it as a real directory with its own
             # token, and the namespace forks silently.
-            legacy.symlink_to(new)
+            _link_legacy(legacy, new)
     except FileNotFoundError:
         # A concurrent starter finished the move between two of our checks.
         # Every entry-point calls this at startup and simultaneous starts are
@@ -172,6 +172,14 @@ def _drain_into(src: Path, dst: Path) -> bool:
     a conflict would refuse the migration on exactly the machines it exists
     for, permanently and with no self-repair.
     """
+    if src.resolve() == dst.resolve():
+        # A peer entry-point completed the whole migration between our
+        # is_symlink() and is_dir() checks, so `src` now reaches `dst` through
+        # the symlink it just created. Every entry would "collide" with itself
+        # and we would report a hand-repair job on a correctly migrated
+        # machine. With `when: "always"` every session runs this at open, so
+        # the window gets hit for real.
+        return True
     collisions = {e.name for e in src.iterdir() if (dst / e.name).exists()}
     live = collisions - _DISPOSABLE
     if live:
@@ -183,9 +191,20 @@ def _drain_into(src: Path, dst: Path) -> bool:
             f"new builds will use separate tokens until this is resolved by hand."
         )
         return False
+    stuck = []
     for e in src.iterdir():
-        if e.name not in collisions:
+        if e.name in collisions:
+            continue
+        try:
             os.rename(e, dst / e.name)
+        except OSError:
+            # Keep going rather than propagating. A half-drained `src` that
+            # never reaches the symlink below is the split namespace this whole
+            # function exists to avoid, and the next run would then see a live
+            # collision and refuse permanently.
+            stuck.append(e.name)
+    if stuck:
+        _migration_warn(f"could not move {sorted(stuck)} out of {src}")
     try:
         src.rmdir()
     except OSError:
@@ -199,9 +218,20 @@ def _drain_into(src: Path, dst: Path) -> bool:
                             f"not replacing {src} with a symlink")
             return False
         os.rename(src, aside)
-        _migration_warn(f"set {aside} aside; it holds only regenerable files "
-                        f"and can be deleted")
+        _migration_warn(f"set {aside} aside so {src} could become a symlink; "
+                        f"review it before deleting")
     return True
+
+
+def _link_legacy(legacy: Path, new: Path) -> None:
+    """Point the legacy path at the live one, tolerating a peer that got there
+    first — `symlink_to` raises FileExistsError, an OSError, which the caller
+    would otherwise report as a migration failure on a machine where the
+    migration in fact succeeded."""
+    try:
+        legacy.symlink_to(new)
+    except FileExistsError:
+        pass
 
 
 def _mark_migrated(new: Path) -> None:
@@ -263,6 +293,20 @@ def election_lock_path(port: int = DEFAULT_PORT, host: str | None = None) -> Pat
     SO_REUSEADDR would otherwise allow before either socket listens) and spawn
     duplicate servers that clobber each other's identity."""
     return data_dir() / f"{_identity_stem(port, host)}.election.lock"
+
+
+def autostart_optout_path() -> Path:
+    """Records "the user turned auto-start off", outside the plugin directory.
+
+    `auto_start.py` expresses the setting by rewriting `when` in the plugin's
+    own `monitors/monitors.json`, which `/plugin update` overwrites with the
+    shipped file. While the shipped default was lazy that was harmless for
+    opt-outs; now that it ships `always`, an update would silently hand
+    always-on monitors back to someone who had explicitly turned them off. The
+    data dir survives updates, so the opt-out lives here and `client.py`
+    honours it when it was started by the monitor.
+    """
+    return data_dir() / "autostart-off"
 
 
 def clients_dir() -> Path:

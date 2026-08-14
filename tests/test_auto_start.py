@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 
@@ -30,8 +31,14 @@ def fake_plugin_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _run(args: list[str], plugin_root: Path | None) -> subprocess.CompletedProcess:
-    env = {"PATH": "/usr/bin:/bin"}
+def _run(args: list[str], plugin_root: Path | None,
+         data_dir: Path | None = None) -> subprocess.CompletedProcess:
+    # auto_start now mirrors the setting into the data dir (so a plugin update
+    # can't silently undo an opt-out), so every run needs one of its own or it
+    # would reach into the developer's real ~/.claude/data.
+    env = {"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
+           "HUBBUB_DATA_DIR": str(data_dir if data_dir is not None
+                                  else Path(tempfile.mkdtemp()) / "data")}
     if plugin_root is not None:
         env["CLAUDE_PLUGIN_ROOT"] = str(plugin_root)
     return subprocess.run(
@@ -130,3 +137,47 @@ class TestErrors:
         # No flags → argparse should fail (mutually exclusive group, required=True)
         r = _run([], fake_plugin_root)
         assert r.returncode != 0
+
+
+class TestDurableOptOut:
+    """`auto-start off` expresses itself by rewriting `when` in the plugin's
+    own monitors.json, which `/plugin update` overwrites with the shipped file.
+    Now that the shipped default is `always`, an update would silently hand
+    always-on monitors back to a user who turned them off — so the setting is
+    mirrored into the data dir, which updates cannot touch."""
+
+    def test_off_writes_the_optout(self, fake_plugin_root: Path, tmp_path: Path):
+        data = tmp_path / "data"
+        r = _run(["--off"], fake_plugin_root, data_dir=data)
+        assert r.returncode == 0, r.stderr
+        assert (data / "autostart-off").exists()
+
+    def test_on_clears_the_optout(self, fake_plugin_root: Path, tmp_path: Path):
+        data = tmp_path / "data"
+        _run(["--off"], fake_plugin_root, data_dir=data)
+        r = _run(["--on"], fake_plugin_root, data_dir=data)
+        assert r.returncode == 0, r.stderr
+        assert not (data / "autostart-off").exists()
+
+    def test_off_is_reasserted_when_when_already_matches(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """A plugin update restores the shipped `when` but leaves the data dir
+        alone, so the two can disagree. `--off` must converge them even when it
+        reports "no change"."""
+        data = tmp_path / "data"
+        r = _run(["--off"], fake_plugin_root, data_dir=data)   # fixture ships LAZY
+        assert "no change" in r.stdout
+        assert (data / "autostart-off").exists()
+
+    def test_status_flags_an_update_that_undid_the_optout(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        data = tmp_path / "data"
+        _run(["--off"], fake_plugin_root, data_dir=data)
+        _run(["--on"], fake_plugin_root, data_dir=data)
+        # Simulate `/plugin update`: shipped `always` returns, opt-out restored
+        # by the user's earlier choice.
+        (data / "autostart-off").parent.mkdir(parents=True, exist_ok=True)
+        (data / "autostart-off").touch()
+        r = _run(["--status"], fake_plugin_root, data_dir=data)
+        assert "opt-out" in r.stdout
+        assert "wins" in r.stdout
