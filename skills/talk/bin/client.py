@@ -332,7 +332,13 @@ class Client:
             if welcome.get("op") == "error":
                 code = welcome.get("code", "")
                 if code == shared.ErrorCode.NAME_TAKEN:
-                    candidates = welcome.get("candidates", [])
+                    # Only adopt a candidate we know will pass. An older
+                    # server (or a future one) can suggest something NAME_RE
+                    # rejects, and adopting it turns a recoverable collision
+                    # into `hello rejected: invalid_name`, which stops the
+                    # monitor for good rather than retrying.
+                    candidates = [c for c in welcome.get("candidates", [])
+                                  if isinstance(c, str) and shared.validate_name(c)]
                     if (candidates and
                             self._collision_retries < self._max_collision_retries):
                         # Auto-retry with server's first suggestion. Common case:

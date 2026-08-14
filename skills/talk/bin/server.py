@@ -347,7 +347,7 @@ class Server:
             if reject is None and name:
                 for existing in self._registry.values():
                     if existing.role == shared.Role.AGENT and existing.name == name:
-                        candidates = [f"{name}-{i}" for i in range(2, 5)]
+                        candidates = shared.suffixed_name_candidates(name)
                         reject = (
                             shared.ErrorCode.NAME_TAKEN,
                             f"name {name!r} is taken",

@@ -1387,3 +1387,29 @@ class TestMigrationIsSerialized:
         # Untouched: the holder is mid-migration and we must not race it.
         assert not self.legacy.is_symlink()
         assert (self.legacy / "token").read_text() == "live"
+
+
+class TestSuffixedNameCandidates:
+    """A bare f"{name}-{i}" overflows NAME_RE's 40-char cap for any name of
+    39-40 chars, and auto_name_from_cwd truncates to exactly 40. With
+    auto-start on, two sessions in a long-named repo collide, the loser adopts
+    an over-length suggestion, the server rejects it as invalid_name, and the
+    client stops for good instead of retrying."""
+
+    def test_long_names_stay_valid(self):
+        for length in (38, 39, 40):
+            name = "a" * length
+            candidates = shared.suffixed_name_candidates(name)
+            assert candidates, length
+            for c in candidates:
+                assert shared.validate_name(c), (length, c)
+
+    def test_candidates_are_distinct(self):
+        assert len(set(shared.suffixed_name_candidates("a" * 40))) == 3
+
+    def test_short_names_are_untouched(self):
+        assert shared.suffixed_name_candidates("web")[:2] == ["web-2", "web-3"]
+
+    def test_no_trailing_hyphen_before_the_suffix(self):
+        # NAME_RE allows a trailing hyphen, but "web--2" reads as a typo.
+        assert "--" not in shared.suffixed_name_candidates("w" * 39 + "-")[0]

@@ -174,8 +174,8 @@ defeats the suite's whole isolation story.
 `test_data_dir_has_no_filesystem_side_effects` guards it.
 
 **`hubbub/` already existing does not mean the migration is done, and a
-colliding `venv` is not a conflict.** The guard is `legacy.is_symlink()`, not
-`new.exists()`. `install-deps` is a documented standalone command that creates
+colliding `venv` is not a conflict.** The guard is `_migration_complete()` — the legacy
+symlink *and* the marker — not `new.exists()`. `install-deps` is a documented standalone command that creates
 `<data-dir>/venv` at the *new* path, so a user upgrading from a pre-rename
 install can easily produce `hubbub/venv` before any monitor has migrated
 anything — while that install's own `inter-session/venv` still sits there.

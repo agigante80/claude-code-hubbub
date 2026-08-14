@@ -120,7 +120,13 @@ def _acquire_migration_lock(timeout_s: float = 5.0) -> int | None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o600)
-    except OSError:
+    except OSError as e:
+        # Distinct from "a peer holds it", which is benign. Not being able to
+        # lock at all means the migration never runs, and data_dir() is pure
+        # now — so it returns hubbub/ while the live state stays under
+        # inter-session/, the next ensure_token() mints a fresh token there,
+        # and connected peers start getting `unauthorized`.
+        _migration_warn(f"could not open {path}: {e}; not migrating")
         return None
     deadline = time.monotonic() + timeout_s
     while True:
@@ -159,6 +165,13 @@ def migrate_legacy_data_dir() -> None:
         return
     new = default_data_dir()
     legacy = legacy_data_dir()
+    if not os.path.lexists(legacy) and not (new / MIGRATION_MARKER).is_file():
+        # Never had an `inter-session` directory, and nothing was ever migrated
+        # here — so there is no migration and no repair to do. Checked before
+        # the lock because `_migration_complete` is False forever on such a
+        # machine, which would mean every session open and every helper CLI
+        # taking a machine-wide flock (and creating one) to learn nothing.
+        return
     if _migration_complete(legacy, new):
         # The overwhelmingly common path once migrated: don't make every
         # session open contend for a lock to discover there is nothing to do.
@@ -553,6 +566,28 @@ def client_lock_path(ppid: int) -> Path:
 
 def client_session_path(ppid: int) -> Path:
     return clients_dir() / f"{ppid}.session"
+
+
+NAME_MAX_LEN = 40
+
+
+def suffixed_name_candidates(name: str, count: int = 3) -> list[str]:
+    """`<name>-2 … -N`, trimmed so each one still satisfies NAME_RE.
+
+    A bare f"{name}-{i}" overflows the 40-char cap for any name of 39-40
+    chars — and `auto_name_from_cwd` truncates to exactly 40, so with
+    auto-start on, two sessions in a repo whose basename is long enough
+    collide, get an over-length suggestion, and the second is rejected as
+    `invalid_name` and drops off the bus for good. Trim the base instead.
+    """
+    out = []
+    for i in range(2, 2 + count):
+        suffix = f"-{i}"
+        base = name[: NAME_MAX_LEN - len(suffix)].rstrip("-")
+        candidate = f"{base}{suffix}"
+        if base and validate_name(candidate):
+            out.append(candidate)
+    return out
 
 
 def validate_name(s: str) -> bool:
