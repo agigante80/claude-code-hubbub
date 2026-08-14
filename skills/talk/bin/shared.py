@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import enum
-import errno
 import fcntl
 import json
 import os
 import re
 import secrets
 import sys
+import time
 import unicodedata
 from urllib.parse import quote
 from pathlib import Path
@@ -167,11 +167,17 @@ def migrate_legacy_data_dir() -> None:
         if _migration_complete(legacy, new):
             return
         if isinstance(e, FileNotFoundError) and not os.path.lexists(legacy) \
-                and new.exists():
+                and new.exists() and _await_marker(new):
             # A peer has done the rename and is a few instructions away from
             # the marker and the symlink. With `when: "always"` N sessions open
             # together, so warning here means N-1 apparent failures on the one
             # run that actually succeeds.
+            #
+            # The marker wait is what separates that from a peer that won the
+            # rename and then died (SIGKILL, OOM) before writing it. Those look
+            # identical on disk at this instant, but only the live one goes on
+            # to finish — and the dead one leaves the state the repair branch
+            # cannot fix, which is precisely what deserves a warning.
             return
         _migration_warn(f"could not migrate {legacy} → {new}: {e}")
 
@@ -351,6 +357,21 @@ def _link_legacy(legacy: Path, new: Path) -> None:
                 f"Old and new builds will use separate tokens until one of "
                 f"them is removed by hand."
             )
+
+
+def _await_marker(new: Path, timeout_s: float = 0.5) -> bool:
+    """Wait briefly for a peer to finish writing its migration marker.
+
+    A live peer writes it within microseconds of the rename it just won; one
+    that died in between never will. Short enough not to matter at session
+    open, long enough to tell those two apart."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if (new / MIGRATION_MARKER).is_file():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
 
 
 def _rollback(moved: list[tuple[Path, Path]]) -> None:

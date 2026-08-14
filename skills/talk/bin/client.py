@@ -340,11 +340,17 @@ class Client:
                         )
                         return  # main loop will reconnect with self.name = new_name
                     # Out of retries — surface and stop. Caller picks a new name.
-                    _print_unless_auto(
+                    # Stays loud even when auto-started, unlike the notices
+                    # above: those report one machine-wide fact N times, but
+                    # this is *this* session failing to join at all. Several
+                    # sessions opened in one repo exhaust the retry budget on
+                    # the same cwd-derived name, and silence would leave them
+                    # quietly missing from `list` with nothing to explain it.
+                    # SKILL.md documents a user-facing reaction to this line.
+                    _print_line(
                         f"[inter-session] name {self.name!r} taken after "
                         f"{self._collision_retries} retries; "
-                        f"run /hubbub:talk connect <other-name>",
-                        self.from_monitor,
+                        f"run /hubbub:talk connect <other-name>"
                     )
                     self._stop.set()
                     return
