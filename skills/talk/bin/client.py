@@ -598,19 +598,11 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.from_monitor and not _autostart_wanted():
-        # Two independent ways to be off, checked together because they have
-        # to agree on one answer:
-        #
-        #   1. `/hubbub:talk auto-start off` writes `<data-dir>/autostart-off`.
-        #      The shipped monitors.json says "always" and a plugin update
-        #      restores it, so the opt-out has to be enforced here rather than
-        #      trusted to survive in the plugin dir.
-        #   2. The `auto_start` userConfig, answered at install time and
-        #      delivered as CLAUDE_PLUGIN_OPTION_AUTO_START. `when` is read by
-        #      CC's monitor scheduler before any of our code runs, so we cannot
-        #      express this by templating the manifest — and `${user_config.*}`
-        #      substitution is forbidden anyway because it breaks
-        #      `--plugin-dir` mode. The monitor therefore starts and exits.
+        # Two ways to be off — the durable opt-out file and the
+        # HUBBUB_AUTO_START env var. `_autostart_wanted` owns the precedence
+        # and documents why there is deliberately no userConfig here; don't
+        # restate the model at this call site, which is how the retracted
+        # version of it survived a whole commit that was about retracting it.
         #
         # Checked before the migration errors are replayed: "off" has to mean
         # silent, and a stuck migration would otherwise notify this session at

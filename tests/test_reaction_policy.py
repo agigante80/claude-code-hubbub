@@ -155,13 +155,24 @@ class TestPrefixRenameStaging:
         notice on the old spelling — and step 3 then drops that spelling from
         the policy, so the agent silently stops recognising them. One spelling
         or the other, never a mix.
+
+        Counts only *emitted* literals — lines that are not comments. A
+        correct step-2 commit will naturally add a comment saying "was
+        `[inter-session …]` through 0.2.x", and a raw substring count would
+        read that as a mix and fail the one change this guard exists to
+        approve.
         """
-        old = self.CODE.count("[inter-session")
-        new = self.CODE.count("[hubbub")
+        emitted = [
+            ln for ln in self.CODE.splitlines()
+            if not ln.lstrip().startswith("#")
+        ]
+        body = "\n".join(emitted)
+        old = body.count("[inter-session")
+        new = body.count("[hubbub")
         assert (old > 0) != (new > 0), (
-            f"client.py mixes prefixes: {old} old, {new} new. Step 2 must "
-            f"move the message headers AND the operational notices in the "
-            f"same commit."
+            f"client.py mixes prefixes in emitted strings: {old} old, "
+            f"{new} new. Step 2 must move the message headers AND the "
+            f"operational notices in the same commit."
         )
 
     def test_continuation_line_moves_with_the_header(self):

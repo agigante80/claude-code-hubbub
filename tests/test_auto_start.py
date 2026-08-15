@@ -238,6 +238,32 @@ class TestEnvAutoStartOff:
         r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d")
         assert "NOT applied" not in r.stdout
 
+    def test_precedence_matches_the_client_not_just_the_key_list(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """Mirroring `client.py`'s key *list* is not enough; the resolution
+        rule has to match too.
+
+        `_env_bool` returns on the first **parseable** key, so a truthy
+        `HUBBUB_AUTO_START` shadows a falsey legacy `INTER_SESSION_AUTO_START`
+        and the monitor stays up. Scanning for the first *falsey* key instead
+        disagreed: it reported `OFF (forced)` and refused `auto-start on`,
+        which is precisely the upgrader's case — a stale legacy export in the
+        profile plus the new spelling from the current docs — and it left no
+        in-product way to clear the durable opt-out.
+        """
+        r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d",
+                 extra_env={"HUBBUB_AUTO_START": "true",
+                            "INTER_SESSION_AUTO_START": "false"})
+        assert "NOT applied" not in r.stdout, (
+            "refused an --on for a monitor that would actually have started"
+        )
+
+    def test_legacy_key_still_decides_when_new_one_is_absent(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        r = _run(["--status"], fake_plugin_root, data_dir=tmp_path / "d",
+                 extra_env={"INTER_SESSION_AUTO_START": "false"})
+        assert "INTER_SESSION_AUTO_START" in r.stdout
+
     def test_plugin_option_is_ignored(
             self, fake_plugin_root: Path, tmp_path: Path):
         """CC never injects CLAUDE_PLUGIN_OPTION_* into a monitor, so acting

@@ -3,7 +3,7 @@
 | Field | Value |
 | :--- | :--- |
 | **Status** | Fixed in this fork (reaction policy states only the *leading* header is authoritative). Still open upstream — PR [#9](https://github.com/yilunzhang/claude-code-inter-session/pull/9). |
-| **Regression test** | `test_reaction_policy.py::test_only_leading_header_is_authoritative` |
+| **Regression test** | `tests/test_reaction_policy.py::TestReactionPolicy::test_only_leading_header_is_authoritative` |
 | **Component** | `skills/talk/bin` (message rendering) |
 | **Category** | Output encoding / injection (directive spoofing) |
 | **Reporter** | Security review, 2026-07-12 |

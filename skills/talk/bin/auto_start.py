@@ -177,16 +177,35 @@ _FALSEY = {"0", "false", "no", "off"}
 _AUTOSTART_ENV_KEYS = ("HUBBUB_AUTO_START", "INTER_SESSION_AUTO_START")
 
 
-def _env_says_off() -> str | None:
-    """Name of the first env key explicitly turning auto-start off, else None.
+_TRUTHY = {"1", "true", "yes", "on"}
 
-    Returns the key rather than a bool so the message can name it — "unset it"
-    is not actionable advice without saying which one.
+
+def _env_says_off() -> str | None:
+    """Name of the env key that *decides* auto-start off, else None.
+
+    Must mirror `client.py::_env_bool`'s resolution, not just its key list.
+    The rule is **first parseable value wins**, so a truthy `HUBBUB_AUTO_START`
+    shadows a falsey legacy `INTER_SESSION_AUTO_START` — scanning for the first
+    *falsey* key instead would disagree with the monitor.
+
+    Concretely, that disagreement stranded upgraders: someone with
+    `INTER_SESSION_AUTO_START=false` left in their profile who follows the
+    current docs and exports `HUBBUB_AUTO_START=true` gets a monitor that
+    stays up, while this command reported `OFF (forced)` and refused
+    `auto-start on` — leaving no in-product way to clear the durable opt-out.
+
+    Returns the key rather than a bool so the message can name it; "unset it"
+    is not actionable without saying which one.
     """
     for k in _AUTOSTART_ENV_KEYS:
         v = os.environ.get(k)
-        if v is not None and v.strip().lower() in _FALSEY:
+        if v is None:
+            continue
+        v = v.strip().lower()
+        if v in _FALSEY:
             return k
+        if v in _TRUTHY:
+            return None  # this key decides, and it decides "on"
     return None
 
 
