@@ -1227,7 +1227,7 @@ def find_cc_ancestor_pid() -> int:
 
 
 def resolve_listener_key() -> int:
-    """Pid used as the state-file key for the inter-session listener of the
+    """Pid used as the state-file key for the hubbub listener of the
     current Claude Code session. Both `client.py` (writer) and helpers
     (`send.py`/`list.py` readers) must compute this the same way.
 
