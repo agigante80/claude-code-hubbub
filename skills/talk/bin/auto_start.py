@@ -39,31 +39,75 @@ LAZY = "on-skill-invoke:talk"
 MONITOR_NAME = "hubbub-client"
 
 
-def _resolve_monitors_path() -> Path:
-    # monitors.json lives at <plugin-root>/monitors/monitors.json.
-    # This script lives at <plugin-root>/skills/talk/bin/auto_start.py,
-    # so the plugin root is FOUR parents up from this file.
-    #
-    # Resolution order:
-    #   1. CLAUDE_PLUGIN_ROOT env var (override; rarely set in subprocesses
-    #      because ${CLAUDE_PLUGIN_ROOT} in CC manifests is a substitution
-    #      token, not an exported env var).
-    #   2. Script-relative: walk up four parents.
-    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    candidates: list[Path] = []
-    if env_root:
-        candidates.append(Path(env_root))
-    candidates.append(Path(__file__).resolve().parents[3])
+def _is_our_plugin_root(root: Path) -> bool:
+    """Does `root` carry hubbub's own plugin manifest?
 
-    for root in candidates:
-        p = root / "monitors" / "monitors.json"
+    The marker only this plugin's root has. Used to validate an *inferred*
+    root, never an explicit one — see `_resolve_monitors_path`.
+    """
+    try:
+        manifest = json.loads((root / ".claude-plugin" / "plugin.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(manifest, dict) and manifest.get("name") == "hubbub"
+
+
+def _resolve_monitors_path() -> Path:
+    """Locate *this plugin's* monitors.json, or exit 2 without writing anything.
+
+    monitors.json lives at `<plugin-root>/monitors/monitors.json`, and this
+    script at `<plugin-root>/skills/talk/bin/auto_start.py`, so the root is
+    four parents up. Two separate hazards, fixed separately (fork #16):
+
+    **An explicit `CLAUDE_PLUGIN_ROOT` is authoritative — honour it or fail.**
+    It used to be the first of two *candidates*, so pointing it at a path that
+    does not exist fell through to the script-relative one. During the 0.2.0
+    review that silently rewrote this repo's own `monitors/monitors.json` and
+    the tree had to be restored with `git checkout`. Note a marker check would
+    not have caught that: the repo *is* a valid hubbub plugin root. The only
+    fix is to stop treating an explicit override as a suggestion.
+
+    **An inferred root must prove it is ours.** Four parents up from a
+    standalone-skill install (`~/.claude/skills/talk/bin/auto_start.py`) is
+    `~/.claude`, so a `~/.claude/monitors/monitors.json` belonging to anything
+    else would be loaded and edited. `_find_entry` would then exit 2 on a
+    foreign file rather than corrupt it, but the search should not be reaching
+    there at all.
+    """
+    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if env_root:
+        p = Path(env_root) / "monitors" / "monitors.json"
         if p.is_file():
             return p
+        sys.stderr.write(
+            f"auto_start: CLAUDE_PLUGIN_ROOT is set to {env_root!r} but "
+            f"{p} does not exist. Refusing to fall back to a script-relative "
+            f"guess — an explicit root that is wrong is a bug to surface, not "
+            f"to work around, and the fallback has silently edited the wrong "
+            f"manifest before.\n"
+        )
+        sys.exit(2)
 
-    sys.stderr.write(
-        "auto_start: could not locate monitors.json. Searched: "
-        f"{[str(c / 'monitors' / 'monitors.json') for c in candidates]}\n"
-    )
+    root = Path(__file__).resolve().parents[3]
+    p = root / "monitors" / "monitors.json"
+    if p.is_file() and _is_our_plugin_root(root):
+        return p
+
+    if p.is_file():
+        sys.stderr.write(
+            f"auto_start: found {p} but {root} is not a hubbub plugin root "
+            f"(no .claude-plugin/plugin.json naming this plugin). Refusing to "
+            f"edit someone else's manifest.\n"
+        )
+    else:
+        sys.stderr.write(
+            "auto_start: no hubbub plugin manifest here. auto-start is a "
+            "plugin feature — it toggles the `when` field of a monitor Claude "
+            "Code starts — and this looks like a standalone skill install, "
+            "which has no plugin monitor to govern. There is nothing to "
+            "configure; the skill works as normal and `/hubbub:talk connect` "
+            "starts its own monitor.\n"
+        )
     sys.exit(2)
 
 
