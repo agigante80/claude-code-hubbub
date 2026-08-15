@@ -1684,6 +1684,43 @@ class TestForeignSymlinkKeepsUsOnTheLiveToken:
         assert shared.data_dir() == self.new
         assert shared.ensure_token(shared.token_path())
 
+    def test_symlink_loop_is_caught_by_is_dir_not_by_resolve(self):
+        """Pins *why* the loop case above is safe, because the reason is not
+        the obvious one and a reordering would silently break it.
+
+        The resolve() does not handle a loop on either interpreter, and it
+        misbehaves *differently* on each — measured, not assumed:
+
+          3.12  resolve() raises RuntimeError, which is not OSError, so the
+                `except` arm would not have caught it either
+          3.14  resolve() returns the link itself and does not raise, so
+                `legacy.resolve() != new.resolve()` answers True and we route
+                state at a path that cannot be used
+
+        What saves the loop case on both is `is_dir()` returning False (ELOOP)
+        and answering first. Move the guard below the resolve() and this test
+        fails. Deliberately asserts the invariant (`is_dir` False, verdict
+        False) rather than a specific exception, so it holds across versions —
+        this suite runs 3.14 while the shipped monitors run 3.12.
+        """
+        self.legacy.parent.mkdir(parents=True)
+        self.legacy.symlink_to(self.legacy)
+        assert self.legacy.is_dir() is False
+        assert shared._still_on_legacy(self.legacy, self.new) is False
+
+    def test_resolve_raising_runtime_error_does_not_escape(self, monkeypatch):
+        """Belt-and-braces arm: if the `is_dir()` guard ever stops answering
+        first, a RuntimeError out of resolve() must still not escape into
+        client.py's startup — the exact failure shape 6f42f5b was fixing."""
+        self.legacy.parent.mkdir(parents=True)
+        self.legacy.symlink_to(self.tmp / "real")
+        (self.tmp / "real").mkdir()
+        monkeypatch.setattr(
+            type(self.legacy), "resolve",
+            lambda self, strict=False: (_ for _ in ()).throw(RuntimeError("loop")),
+        )
+        assert shared._still_on_legacy(self.legacy, self.new) is True
+
     def test_symlink_to_a_file_is_not_live_state(self):
         target = self.tmp / "afile"
         target.write_text("x")
