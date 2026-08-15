@@ -126,7 +126,11 @@ def _acquire_migration_lock(timeout_s: float = 5.0) -> int | None:
         # now — so it returns hubbub/ while the live state stays under
         # inter-session/, the next ensure_token() mints a fresh token there,
         # and connected peers start getting `unauthorized`.
-        _migration_error(f"could not open {path}: {e}; not migrating")
+        _migration_error(
+            f"could not open {path}: {e}; not migrating. Live state may stay "
+            f"under the legacy path while this build uses the new one — run "
+            f"/hubbub:talk doctor to check."
+        )
         return None
     deadline = time.monotonic() + timeout_s
     while True:
@@ -283,7 +287,10 @@ def migrate_legacy_data_dir() -> None:
             # to finish — and the dead one leaves the state the repair branch
             # cannot fix, which is precisely what deserves a warning.
             return
-        _migration_error(f"could not migrate {legacy} → {new}: {e}")
+        _migration_error(
+            f"could not migrate {legacy} → {new}: {e}. Run /hubbub:talk "
+            f"doctor to see which path holds the live token."
+        )
     finally:
         os.close(lock_fd)
         # From the state on disk, not from which branch we took. Winning the
@@ -333,7 +340,9 @@ def _drain_into(src: Path, dst: Path) -> bool:
         # session; a human has to say which token is the live one.
         _migration_error(
             f"cannot merge {src} into {dst}: both hold {sorted(live)}. Old and "
-            f"new builds will use separate tokens until this is resolved by hand."
+            f"new builds will use separate tokens until this is resolved by "
+            f"hand. Run /hubbub:talk doctor for both sides' tokens and live "
+            f"listeners."
         )
         return False
     # Live state first, and all-or-nothing. Bailing out *after* moving some of
@@ -466,7 +475,8 @@ def _link_legacy(legacy: Path, new: Path) -> None:
                 f"{legacy} reappeared as a real directory while migrating to "
                 f"{new}; an older build has recreated it with its own token. "
                 f"Old and new builds will use separate tokens until one of "
-                f"them is removed by hand."
+                f"them is removed by hand. Run /hubbub:talk doctor to see "
+                f"which side has the listeners you want to keep."
             )
 
 
@@ -558,7 +568,18 @@ def _migration_error(msg: str) -> None:
     in every entry-point, so the monitor's notification channel was never
     offered them. By the rule in client.py's `_print_unless_auto`, a fault that
     prevents the session working stays on the channel the user actually sees.
+
+    Every message routed here should name `/hubbub:talk doctor` (fork #15).
+    Telling someone their install needs manual repair without saying how to
+    see the state they must decide about is most of why this was unactionable.
     """
+    # Appended here rather than at each call site. There are eight of them and
+    # patching them individually is the exact shape #18 records this file
+    # failing at repeatedly — fix two, miss the third. A call site that has
+    # something more specific to say already names doctor and keeps its own
+    # wording.
+    if "doctor" not in msg:
+        msg = f"{msg} Run /hubbub:talk doctor to see the current state."
     line = f"[inter-session] data-dir migration: {msg}"
     # stderr unconditionally, so the record exists even when the escalation
     # below is dropped (an opted-out session must stay silent on stdout).

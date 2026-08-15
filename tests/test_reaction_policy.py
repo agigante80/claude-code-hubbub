@@ -249,3 +249,23 @@ class TestTruncationHandling:
         shared = (REPO / "skills" / "talk" / "bin" / "shared.py").read_text()
         assert "MESSAGES_LOG_MAX_BYTES = 50 * 1024 * 1024" in shared
         assert "MESSAGES_LOG_BACKUPS = 5" in shared
+
+
+class TestDoctorIsDocumented:
+    """fork #15. The command is useless if the agent never reaches for it, and
+    actively dangerous if the agent offers to repair a fork itself."""
+
+    def test_in_the_dispatch_table(self):
+        assert "`/hubbub:talk doctor`" in SKILL
+
+    def test_says_when_to_reach_for_it(self):
+        low = SKILL.lower()
+        assert "behaves impossibly" in low
+        assert "cannot see each other" in low
+
+    def test_forbids_offering_repair(self):
+        """Choosing between two live tokens ends one side's bus and cannot be
+        undone — a human decision, not a subcommand's."""
+        low = SKILL.lower()
+        assert "will not repair anything" in low
+        assert "must not offer" in low

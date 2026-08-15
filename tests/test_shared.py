@@ -1752,3 +1752,36 @@ class TestLockPathHasOneDefinition:
     def test_matches_client_lock_path(self, tmp_data_dir):
         assert (shared.lock_path_for_session_file(shared.client_session_path(7))
                 == shared.client_lock_path(7))
+
+
+class TestMigrationErrorsPointAtDoctor:
+    """fork #15. A "resolve this by hand" message that does not say how to see
+    the state is most of why the fork was unactionable — the user is told they
+    have a problem and given no way to look at it."""
+
+    def test_pointer_is_appended_centrally(self, capsys):
+        """Behavioural, not structural. There are eight `_migration_error`
+        call sites; asserting each one remembers the pointer is the
+        fix-two-miss-the-third shape #18 records, so the function appends it
+        and this checks the function."""
+        shared._migration_error("something went wrong.")
+        err = capsys.readouterr().err
+        assert "/hubbub:talk doctor" in err
+
+    def test_specific_wording_is_not_duplicated(self, capsys):
+        """A call site with better advice than the generic line keeps it, and
+        must not get both."""
+        shared._migration_error("run /hubbub:talk doctor to pick a side.")
+        err = capsys.readouterr().err
+        assert err.lower().count("doctor") == 1, err
+
+    def test_reaches_the_notification_channel_too(self):
+        """stderr for the auto-started monitor goes to a file nobody opens, so
+        the reporter hook is what actually surfaces this to the user."""
+        seen = []
+        shared.set_migration_reporter(seen.append)
+        try:
+            shared._migration_error("forked.")
+        finally:
+            shared.set_migration_reporter(None)
+        assert seen and "/hubbub:talk doctor" in seen[0]

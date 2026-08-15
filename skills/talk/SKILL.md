@@ -202,6 +202,7 @@ When the user invokes `/hubbub:talk [args]`, parse `args` to dispatch:
 | `/hubbub:talk status`                       | Show this session's connection state.                             |
 | `/hubbub:talk disconnect`                   | TaskStop the running monitor.                                     |
 | `/hubbub:talk auto-start [on\|off\|status]` | Toggle plugin auto-start (edits `monitors.json` `when` field).    |
+| `/hubbub:talk doctor`                       | Report the data directory's health. Read-only. Run it when the bus behaves impossibly. |
 
 ## connect — start the monitor
 
@@ -433,6 +434,35 @@ Claude Code owns the monitor it declared in `monitors.json`, so it may
 start another one — certainly at the next session open, possibly sooner.
 Say so when reporting, and offer `/hubbub:talk auto-start off` (then
 `/reload-plugins`) if the user wants the session to stay off the bus.
+
+## doctor — report the data directory's health
+
+`python3 <bin>/doctor.py`
+
+Read-only. Exits 0 when everything is fine, 1 when something needs the
+user's attention, and prints the reason either way. Surface its output
+verbatim — it is written for the user, not for you to summarize.
+
+**Reach for it when the bus behaves impossibly**: peers that cannot see
+each other though both say they are connected, `unauthorized` on a
+session that worked yesterday, a `list` that is empty while monitors are
+plainly running, or any report that two sessions disagree about who is
+on the bus.
+
+It reports which data directory is live, what is actually at the legacy
+path (missing, real directory, symlink, dangling symlink, loop), whether
+the migration marker is present, any parked `inter-session.pre-rename*`
+leftovers, who holds the port, and which listeners are alive.
+
+The finding it exists for is a **forked bus**: both directories real,
+each with its own token, so old and new builds run on separate buses
+that cannot see each other and *neither reports an error*. When that
+happens it prints both sides with their token mtimes and live listeners,
+so the user can choose which to keep.
+
+**It will not repair anything, and you must not offer to.** Choosing a
+side ends the other side's bus and cannot be undone. Give the user the
+report and let them decide.
 
 ## auto-start — toggle plugin auto-start mode
 
