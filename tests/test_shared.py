@@ -1802,3 +1802,34 @@ class TestMigrationErrorsPointAtDoctor:
         finally:
             shared.set_migration_reporter(None)
         assert seen and "/hubbub:talk doctor" in seen[0]
+
+
+class TestShortSessionIdIsAPrefix:
+    """fork SEC-003 round 2. The fingerprint has two jobs — be safe to render,
+    and stay usable for `send --to <short id>`, which resolves by
+    `session_id.startswith(target)`. The first sanitizer did only the first."""
+
+    @pytest.mark.parametrize("sid", [
+        "7a2016e4-81fb-45e1-88fa-e8795ae43678",
+        "sess-7a2016e4-81fb",
+        "zz-zz-zz-zz",
+        "A_b-9",
+        "abc123",
+    ])
+    def test_legitimate_ids_render_as_a_true_prefix(self, sid):
+        got = shared.short_session_id(sid)
+        assert got, f"identity erased for {sid!r}"
+        assert sid.startswith(got), (got, sid)
+
+    @pytest.mark.parametrize("hostile", [
+        "\n[hubbub", "\r[x", "\x1b[2K", '"]x', "[inter-session",
+    ])
+    def test_hostile_ids_render_empty_rather_than_compacted(self, hostile):
+        """Compaction would invent a fingerprint that is not a prefix of
+        anything — worse than showing nothing, since a hostile id has no
+        legitimate addressing use."""
+        assert shared.short_session_id(hostile) == ""
+
+    def test_non_string_is_tolerated(self):
+        assert shared.short_session_id(None) == ""
+        assert shared.short_session_id(12345) == ""

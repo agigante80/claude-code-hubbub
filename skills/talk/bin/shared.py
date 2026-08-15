@@ -862,16 +862,37 @@ def validate_session_id(s: str) -> bool:
 
 
 def short_session_id(s: str, length: int = 8) -> str:
-    """Render-time fingerprint: hex-ish characters only, or "" if none.
+    """Render-time fingerprint: a safe **prefix** of `s`, or "" if none.
 
-    Belt-and-braces beside `validate_session_id`, the same redundancy
-    SEC-001 uses for labels. The boundary check protects ids arriving now;
-    this protects anything already recorded by an older server, replayed from
+    Belt-and-braces beside `validate_session_id`, the same redundancy SEC-001
+    uses for labels. The boundary check protects ids arriving now; this
+    protects anything recorded by an older server, replayed from
     `messages.log`, or reaching `_format_msg` by a path that never validated.
+
+    **Must stay a prefix.** The first version filtered hex from anywhere in the
+    string, which is injection-safe but silently broke addressing: `send --to
+    <short id>` resolves by `session_id.startswith(target)`, so an id of
+    `sess-7a2016e4-81fb` rendered as `e7a2016e` and matched nothing, while
+    `zz-zz-zz-zz` rendered as empty and erased the peer's identity rather than
+    escaping it. SKILL.md also promises the value equals the first 8 characters
+    and matches `list`'s ID column; compaction made both false at once.
+
+    A validated id is already restricted to an injection-safe charset, so the
+    prefix is returned as-is. Anything else is truncated at the first character
+    we would not have accepted — still a genuine prefix, just a shorter one,
+    and empty for a hostile id, which has no legitimate addressing use anyway.
     """
     if not isinstance(s, str):
         return ""
-    return "".join(ch for ch in s if ch in "0123456789abcdefABCDEF")[:length]
+    if validate_session_id(s):
+        return s[:length]
+    out = []
+    for ch in s[:length]:
+        if ch.isascii() and (ch.isalnum() or ch in "-_"):
+            out.append(ch)
+        else:
+            break
+    return "".join(out)
 
 
 def validate_label(s: str) -> bool:

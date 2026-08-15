@@ -314,15 +314,35 @@ class TestFormatMsg:
         assert "[hubbub" not in out, f"{why}: {out!r}"
         assert "\x1b" not in out, f"{why}: {out!r}"
 
-    def test_nameless_peer_does_not_print_the_id_twice(self):
-        """`from_name` falls back to the fingerprint, so rendering `sid=` as
-        well said the same thing twice and wasted 13 characters of a tight
-        budget."""
+    def test_nameless_peer_still_carries_a_fingerprint(self):
+        """A nameless peer shows `from="?"` and keeps `sid=`.
+
+        The first attempt reused the fingerprint as the name and then
+        suppressed `sid=` as a duplicate — so a current-build nameless peer
+        emitted no `sid=`, which the policy tells the agent means "older
+        build". It also let a peer naming itself `7a2016e4` with a matching
+        session_id produce a header byte-identical to that nameless session,
+        which is the ambiguity the field exists to remove.
+        """
         out = client_mod._format_msg({
             "msg_id": "x", "from": "7a2016e4-1111", "from_label": "",
             "text": "t"})
-        assert 'from="7a2016e4"' in out
-        assert "sid=" not in out
+        assert 'from="?"' in out
+        assert "sid=7a2016e4" in out
+
+    def test_fingerprint_is_a_real_prefix_of_the_session_id(self):
+        """`send --to <short id>` resolves by `session_id.startswith(target)`,
+        and SKILL.md promises the rendered value is the first 8 characters. A
+        sanitizer that compacted safe characters from anywhere satisfied
+        neither."""
+        sid = "sess-7a2016e4-81fb-45e1"
+        out = client_mod._format_msg({
+            "msg_id": "x", "from": sid, "from_name": "alpha",
+            "from_label": "", "text": "t"})
+        import re
+        m = re.search(r"sid=([^\s\]]+)", out)
+        assert m, out
+        assert sid.startswith(m.group(1)), (m.group(1), sid)
 
     def test_truncates(self):
         big = "y" * (shared.STDOUT_CAP + 1000)

@@ -119,10 +119,20 @@ async def _run(args) -> int:
             resp = json.loads(resp_raw)
             if resp.get("op") == "error":
                 msg = f"error: {resp.get('code', '')}: {resp.get('message', '')}"
+                # Sanitized here too, not just server-side. The whole point
+                # of the second layer is ids from a server that predates the
+                # boundary check — and servers outlive upgrades until their
+                # idle-shutdown, so a helper from this build routinely talks
+                # to one. Same treatment as the `list` ID column, so the
+                # values suggested here are the ones `list` shows.
                 if "matches" in resp:
-                    msg += f" (matches: {', '.join(resp['matches'])})"
+                    safe = [shared.short_session_id(m) for m in resp["matches"]
+                            if isinstance(m, str)]
+                    msg += f" (matches: {', '.join(safe)})"
                 if "candidates" in resp:
-                    msg += f" (try: {', '.join(resp['candidates'])})"
+                    safe = [shared.sanitize_for_stdout(str(c))[:64]
+                            for c in resp["candidates"]]
+                    msg += f" (try: {', '.join(safe)})"
                 print(msg, file=sys.stderr)
                 return 1
         except asyncio.TimeoutError:
