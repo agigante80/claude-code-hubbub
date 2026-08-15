@@ -17,6 +17,8 @@ import pytest
 
 from bin import shared
 
+from tests import waiting
+
 REPO = Path(__file__).resolve().parent.parent
 BIN_DIR = REPO / "skills" / "talk" / "bin"
 
@@ -110,13 +112,15 @@ class TestSendHelper:
         try:
             _wait_for_state(tmp_data_dir, ppid_a)
             _wait_for_state(tmp_data_dir, ppid_b)
-            time.sleep(0.5)
             r = _run_helper("send.py", tmp_data_dir, ppid_a,
                             "--to", "beta", "--text", "hi from alpha")
             assert r.returncode == 0, f"stderr={r.stderr!r}"
-            time.sleep(0.5)
-            output = listener_b.stdout.readline()
-            assert "hi from alpha" in output
+            # Deadline-honouring read: a blocking readline() here hung the
+            # whole suite when the message never arrived (fork #27), and the
+            # sleeps around it were the fork #23 shape — the registration
+            # waits above are the real precondition.
+            output = waiting.read_line(listener_b)
+            assert "hi from alpha" in output, f"got {output!r}"
             # `from` should be alpha (the listener for ppid_a), not the control's session_id
             assert 'from="alpha"' in output
         finally:
@@ -133,7 +137,6 @@ class TestSendHelper:
         listener = _spawn_listener(free_port, "alpha", tmp_data_dir, ppid)
         try:
             _wait_for_state(tmp_data_dir, ppid)
-            time.sleep(0.5)
             r = _run_helper("send.py", tmp_data_dir, ppid,
                             "--to", "nobody", "--text", "hi")
             assert r.returncode == 1
@@ -160,14 +163,14 @@ class TestSendHelper:
         try:
             _wait_for_state(tmp_data_dir, ppid_a)
             _wait_for_state(tmp_data_dir, ppid_b)
-            time.sleep(0.5)
             r = _run_helper("send.py", tmp_data_dir, ppid_a,
                             "--all", "--text", "hello everyone")
             assert r.returncode == 0
-            time.sleep(0.5)
-            # Reading non-blocking: the line should be in stdout buffer.
-            line_b = listener_b.stdout.readline()
-            assert "hello everyone" in line_b
+            # The old comment here claimed this read was non-blocking. It was
+            # not: readline() blocks until a line arrives or the pipe closes,
+            # so a dropped broadcast hung the suite (fork #27).
+            line_b = waiting.read_line(listener_b)
+            assert "hello everyone" in line_b, f"got {line_b!r}"
             assert 'from="alpha"' in line_b
         finally:
             for p in (listener_a, listener_b):
@@ -188,7 +191,6 @@ class TestListHelper:
         try:
             _wait_for_state(tmp_data_dir, ppid_a)
             _wait_for_state(tmp_data_dir, ppid_b)
-            time.sleep(0.5)
             r = _run_helper("list.py", tmp_data_dir, ppid_a)
             assert r.returncode == 0, f"stderr={r.stderr!r}"
             assert "alpha" in r.stdout
@@ -227,7 +229,6 @@ class TestRelabelHelper:
         listener = _spawn_listener(free_port, "relabelme", tmp_data_dir, ppid)
         try:
             _wait_for_state(tmp_data_dir, ppid)
-            time.sleep(0.3)
             r = _run_helper("relabel.py", tmp_data_dir, ppid, "--label", "the controller")
             assert r.returncode == 0, f"stderr={r.stderr!r}"
             assert "relabeled" in r.stdout
@@ -303,7 +304,14 @@ class TestStaleStateCleanup:
         # longer recognizes.
         listener.kill()
         listener.wait(timeout=2)
-        time.sleep(0.5)  # let server detect TCP close + unregister
+        # Wait on the precondition send.py actually checks — the listener
+        # flock being free — rather than sleeping and hoping. SIGKILL releases
+        # the flock, so this is normally instant; under load the old fixed
+        # 0.5 s was a guess about the wrong thing (fork #23).
+        assert waiting.wait_for(
+            lambda: not shared.listener_lock_held(
+                tmp_data_dir / "clients" / f"{ppid}.lock")
+        ), "listener flock never released after SIGKILL"
         state_path = tmp_data_dir / "clients" / f"{ppid}.session"
         stale = dict(state)
         stale["session_id"] = "00000000-0000-0000-0000-000000000000"
@@ -325,7 +333,10 @@ class TestStaleStateCleanup:
         assert state is not None
         listener.kill()
         listener.wait(timeout=2)
-        time.sleep(0.5)
+        assert waiting.wait_for(
+            lambda: not shared.listener_lock_held(
+                tmp_data_dir / "clients" / f"{ppid}.lock")
+        ), "listener flock never released after SIGKILL"
         state_path = tmp_data_dir / "clients" / f"{ppid}.session"
         stale = dict(state)
         stale["session_id"] = "00000000-0000-0000-0000-000000000000"
