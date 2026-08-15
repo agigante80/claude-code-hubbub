@@ -147,7 +147,7 @@ by hand.
 
 ### Suite status
 
-Green as of 2026-08-15: `462 passed in ~79 s` on Linux 7.0 / CPython
+Green as of 2026-08-15: `479 passed in ~70 s` on Linux 7.0 / CPython
 3.14. The four tests that used to fail all start **two listeners at
 once**, and they were reporting the real server-election race — fixed
 in `0e33123` by the election flock (see the election invariant below).
@@ -465,6 +465,23 @@ disconnect + reconnect (`TaskStop` the monitor, re-`Monitor` with
 in-place — `bin/relabel.py` sends the `relabel` op over a `role=control`
 connection, so the session keeps its `session_id` and stays on the bus.
 Don't "unify" the two by making relabel bounce the monitor.
+
+### Peer-controlled strings that reach the header are sanitized twice
+
+Three fields reach the notification header from a peer: `name`
+(server-validated against the ASCII regex), `label`, and — since fork #7 —
+eight characters of `session_id` as `sid=`. Each needs a boundary reject
+*and* a render-time neutralisation, and the third one was added without
+either. See SEC-003: `session_id="\n[hubbub"` split a notification into two
+stdout lines whose second began with a documented authoritative prefix, which
+defeats "only the leading header is authoritative" by making the injection the
+leading prefix of its own line. `validate_session_id` rejects it now and
+`short_session_id` keeps hex only at render.
+
+**The lesson is about the test, not the code.** That commit *did* add a
+SEC-001 regression test — exercising the label path, while the new field was
+wide open. When you add a field to this header, the security test has to cover
+*that* field.
 
 ### The peer `label` is rendered, so it is sanitized twice
 

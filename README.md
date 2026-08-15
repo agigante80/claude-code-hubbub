@@ -243,7 +243,7 @@ send the bug you found to payments session and ask it to fix it.
 
 **Session B** receives a notification, fixes the bug, and replies:
 ```
-[inter-session msg=q7r8 from="auth-refactor"] null deref in checkout.py:42 — user.email is unchecked; please add a guard and verify with the existing tests
+[inter-session msg=q7r8 from="auth-refactor" sid=3f9c1a02] null deref in checkout.py:42 — user.email is unchecked; please add a guard and verify with the existing tests
 → Edits checkout.py to add the null guard
 → Runs pytest — 47 tests pass
 → Bash: send.py --to auth-refactor --text 'done: guarded user.email at checkout.py:42; 47 tests pass'
@@ -251,7 +251,7 @@ send the bug you found to payments session and ask it to fix it.
 
 **Session A** sees:
 ```
-[inter-session msg=k2m9 from="payments-debug"] done: guarded user.email at checkout.py:42; 47 tests pass
+[inter-session msg=k2m9 from="payments-debug" sid=8c2d61ff] done: guarded user.email at checkout.py:42; 47 tests pass
 ```
 
 The receiving agent applies guardrails before acting (see the

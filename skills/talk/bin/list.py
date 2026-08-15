@@ -199,7 +199,7 @@ async def _run(args) -> int:
             if len(cwd) > 38:
                 cwd = "…" + cwd[-37:]
             since = _format_since(s.get("since", ""))
-            sid = s.get("session_id", "")[:8]
+            sid = shared.short_session_id(s.get("session_id", ""))
             print(f"{name:<24} {label:<24} {cwd:<40} {since:<8} {sid}")
     finally:
         await ws.close()

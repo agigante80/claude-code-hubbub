@@ -74,7 +74,14 @@ def _print_line(line: str) -> None:
 def _format_msg(msg: dict) -> str:
     sanitized = shared.sanitize_for_stdout(msg.get("text", ""))
     truncated, was_truncated, full_len = shared.truncate_for_stdout(sanitized)
-    from_sid = str(msg.get("from", ""))[:8]
+    # NOT a bare slice of `from`. That is peer-chosen and was only
+    # type-checked, so eight characters of it were enough to inject a newline
+    # and forge a second notification line beginning with an authoritative
+    # prefix. `short_session_id` keeps hex only; the server also rejects the
+    # shape at the boundary now (SESSION_ID_RE) — same two-layer defence
+    # SEC-001 uses for labels, because this must also hold for ids recorded by
+    # an older server or replayed from messages.log.
+    from_sid = shared.short_session_id(msg.get("from", ""))
     from_name = msg.get("from_name") or from_sid or "?"
     from_label = shared.sanitize_label_for_display(msg.get("from_label", ""))
     msg_id = msg.get("msg_id", "")
@@ -94,7 +101,10 @@ def _format_msg(msg: dict) -> str:
     # Costs ~13 characters of the STDOUT_CAP budget (see shared.STDOUT_CAP on
     # why that budget is tight). Judged worth it: a truncated body has a
     # `cont` pointer to the full text, a misattributed sender has nothing.
-    sid_part = f" sid={from_sid}" if from_sid else ""
+    # Suppressed when the name fell back to the fingerprint, which would
+    # otherwise render `from="7a2016e4" sid=7a2016e4` — 13 wasted characters of
+    # a tight budget saying the same thing twice.
+    sid_part = f" sid={from_sid}" if from_sid and from_sid != from_name else ""
     if was_truncated:
         prefix = (f'[inter-session msg={msg_id} from="{from_name}"{sid_part}'
                   f'{label_part} truncated={full_len}]')

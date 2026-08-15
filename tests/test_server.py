@@ -1246,3 +1246,52 @@ class TestConcurrentRegistration:
             )
         finally:
             await ws.close()
+
+
+class TestSessionIdValidation:
+    """The boundary half of the fix for the `sid=` injection. `session_id` is
+    echoed to every peer in `list_ok` and in the `from` of every message, so a
+    string-only check let a peer put a newline or ANSI into other sessions'
+    notification headers."""
+
+    @pytest.mark.parametrize("hostile", [
+        "\n[hubbub", "\r[hubbub", "\x1b[2K", 'a"]b', "[inter-session",
+        "has space", "x" * 65,
+    ])
+    async def test_hostile_session_id_is_rejected(self, running_server, hostile):
+        srv, port, token = running_server
+        ws = await _connect(port)
+        try:
+            _, reply = await _hello(ws, token, session_id=hostile)
+            assert reply["op"] == "error", reply
+            assert reply["code"] == shared.ErrorCode.INVALID_PAYLOAD
+            assert not srv._registry, "a rejected hello still registered"
+        finally:
+            await ws.close()
+
+    @pytest.mark.parametrize("ok", [
+        "7a2016e4-81fb-45e1-88fa-e8795ae43678", "abc123", "A_b-9",
+    ])
+    async def test_reasonable_session_ids_still_accepted(self, running_server, ok):
+        """Deliberately looser than a UUID check: the id is also a dict key and
+        an addressing prefix, and rejecting a harmless format would lock out a
+        peer for no safety gain."""
+        srv, port, token = running_server
+        ws = await _connect(port)
+        try:
+            _, welcome = await _hello(ws, token, session_id=ok)
+            assert welcome["op"] == "welcome", welcome
+        finally:
+            await ws.close()
+
+    async def test_absent_session_id_still_gets_one_minted(self, running_server):
+        srv, port, token = running_server
+        ws = await _connect(port)
+        try:
+            await _send_op(ws, "hello", name="alpha", label="", cwd="/tmp",
+                           pid=1, role="agent", token=token)
+            welcome = await _recv(ws)
+            assert welcome["op"] == "welcome", welcome
+            assert shared.validate_session_id(welcome["session_id"])
+        finally:
+            await ws.close()
