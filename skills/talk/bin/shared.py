@@ -616,9 +616,9 @@ def _still_on_legacy(legacy: Path, new: Path) -> bool:
         #
         # Both are wrong, differently. `is_dir()` returns False for a loop
         # (ELOOP) on both, and answering first is the only reason the loop case
-        # is safe. Note the suite runs 3.14 and the shipped monitors run the
-        # system 3.12, so a 3.12-only regression here is invisible to `make
-        # test` — see fork #24.
+        # is safe. Note `make test` runs 3.14 and the shipped monitors run the
+        # system 3.12, so a 3.12-only regression here is invisible to it —
+        # use `make test-system` (or `make test-both`) when touching this.
         if not legacy.is_dir():
             return False
         # Unresolvable here means "reachable directory we cannot resolve",
