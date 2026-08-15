@@ -19,28 +19,15 @@ import websockets
 
 from bin import shared, client as client_mod, spawn
 
+from tests import waiting
+
 REPO = Path(__file__).resolve().parent.parent
 BIN_DIR = REPO / "skills" / "talk" / "bin"
 
 
-def _wait_for(predicate, timeout: float = 15.0, interval: float = 0.05) -> bool:
-    """Poll `predicate` until it is true or `timeout` elapses.
-
-    Subprocess tests must not assert on a fixed `time.sleep()`: the sleep that
-    is comfortably long on an idle machine is too short under a full-suite run
-    or a concurrent pytest session, and the resulting failure reads like a
-    product bug rather than a scheduling one (fork #17). Waiting on the
-    condition costs nothing when it is already true.
-    """
-    end = time.time() + timeout
-    while time.time() < end:
-        try:
-            if predicate():
-                return True
-        except OSError:
-            pass
-        time.sleep(interval)
-    return False
+# Shared with test_helpers.py; see tests/waiting.py for why they are not
+# copied per file.
+_wait_for = waiting.wait_for
 
 
 def _peek(path: Path) -> str:
@@ -99,14 +86,9 @@ def _spawn_client(port, name, env_data_dir, ppid_override=None, extra_env=None):
     )
 
 
-def _read_until_nonempty(proc, timeout=5.0):
-    """Read lines from stdout until we get a non-empty one or timeout."""
-    end = time.time() + timeout
-    while time.time() < end:
-        line = proc.stdout.readline()
-        if line:
-            return line.strip()
-    return ""
+# Was a loop around a blocking readline(), so its `timeout` was unenforceable
+# and a missing message hung the suite instead of failing it (fork #27).
+_read_until_nonempty = waiting.read_line
 
 
 class TestResolveLabel:

@@ -97,8 +97,12 @@ broke them was contention for *CPU*, against subprocess tests that asserted on
 fixed `time.sleep()` durations.
 
 The rule is therefore no longer "don't run two", it is **don't assert on a
-sleep**. `tests/test_client.py::_wait_for` polls a condition instead; use it
-for anything that waits on a subprocess.
+sleep, and never read a pipe without an enforceable deadline**. A blocking
+`readline()` in a loop that checks its deadline only *between* reads cannot
+honour it — the read that never returns is exactly the one the timeout is
+for — so a dropped message hung the whole suite instead of failing it, with
+no assertion message and the enclosing `finally` never reaping the
+subprocesses.
 
 Two caveats, so this doesn't read as a guarantee it isn't:
 
@@ -108,8 +112,12 @@ Two caveats, so this doesn't read as a guarantee it isn't:
   other's server and fails `verify_server_identity` (different data dir →
   different token and pidfile), surfacing as `server identity check failed`.
   Rare, and it reads as a product bug when it happens.
-- **`tests/test_helpers.py` still has ten fixed sleeps** of the old shape.
-  None observed failing; tracked in #23.
+- **The shared waits live in `tests/waiting.py`** — `wait_for` for a
+  condition, `read_line` for a pipe read with a deadline it can actually
+  enforce. Use them; the identical bug has been found three times in this
+  suite (#17, #23, #27) and each time only the copy that failed got fixed.
+  One fixed `time.sleep` remains, as the poll interval inside
+  `_wait_for_state`, which is what a poll interval is for.
 
 Also note the suite runs CPython 3.14 (uv-provisioned `.venv`) while the
 shipped monitors run whatever `python3` resolves to — 3.12 on this machine.
