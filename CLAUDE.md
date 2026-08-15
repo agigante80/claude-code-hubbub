@@ -89,15 +89,31 @@ To run pytest with non-make flags, use the venv's pytest directly:
 
 Two concurrent pytest sessions are **expected to pass** as of the #17 fix —
 verified by running two full suites at once (367 each, both green). Each
-session gets its own `tmp_data_dir` and its own ephemeral port, so they never
-contended for *state*; what broke them was contention for *CPU*, against
-subprocess tests that asserted on fixed `time.sleep()` durations.
+session gets its own `tmp_data_dir`, so they do not contend for *state*; what
+broke them was contention for *CPU*, against subprocess tests that asserted on
+fixed `time.sleep()` durations.
 
 The rule is therefore no longer "don't run two", it is **don't assert on a
 sleep**. `tests/test_client.py::_wait_for` polls a condition instead; use it
-for anything that waits on a subprocess. `tests/test_helpers.py` still has ten
-fixed sleeps of the old shape — none observed failing, tracked in #23 — so a
-spurious failure *there* under concurrency is a known gap, not a new bug.
+for anything that waits on a subprocess.
+
+Two caveats, so this doesn't read as a guarantee it isn't:
+
+- **Port isolation is very good, not absolute.** `free_port` binds port 0 and
+  *closes* the socket before returning the number, so a concurrent session can
+  be handed the same port. On a collision one session's client probes the
+  other's server and fails `verify_server_identity` (different data dir →
+  different token and pidfile), surfacing as `server identity check failed`.
+  Rare, and it reads as a product bug when it happens.
+- **`tests/test_helpers.py` still has ten fixed sleeps** of the old shape.
+  None observed failing; tracked in #23.
+
+Also note the suite runs CPython 3.14 (uv-provisioned `.venv`) while the
+shipped monitors run the system interpreter — 3.12 on this machine. That
+difference is not cosmetic: `Path.resolve()` raises `RuntimeError` on a
+symlink loop in 3.12 and silently returns the link in 3.14, which hid a real
+startup crash from `make test` until #19. For anything touching path
+resolution, run `HUBBUB_NO_REEXEC=1 /usr/bin/python3 -m pytest` as well.
 
 No build step, no linter configured. Runtime deps live at
 `skills/talk/requirements.txt` (websockets + psutil); dev

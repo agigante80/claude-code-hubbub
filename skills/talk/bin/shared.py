@@ -140,6 +140,38 @@ def _acquire_migration_lock(timeout_s: float = 5.0) -> int | None:
             time.sleep(0.02)
 
 
+def _resolve_safe(p: Path) -> Path | None:
+    """`Path.resolve()` that cannot raise. `None` means "could not resolve".
+
+    Non-strict `resolve()` is not total. On a **symlink loop** CPython 3.12
+    raises `RuntimeError` — which is not an `OSError`, so every
+    `except OSError` guard in this file missed it — while CPython 3.14 stopped
+    raising and returns the link itself. The suite runs 3.14 and the shipped
+    monitors run the system 3.12, so the 3.12 crash was invisible to
+    `make test`: a looped `~/.claude/data/inter-session` took down all five
+    entry-points at startup with a raw traceback out of
+    `migrate_legacy_data_dir`, which is exactly the failure shape `6f42f5b`
+    set out to remove. Found reviewing that commit for fork #19.
+
+    One helper rather than widening each `except` in place: #18 records that
+    this file has already had the identical bug three times over
+    (`exists()` vs `lexists()`), and that fixing it two sites at a time
+    reliably misses the third.
+    """
+    try:
+        return p.resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _same_target(a: Path, b: Path) -> bool:
+    """Do both paths resolve to the same place? Unresolvable is never "same" —
+    answering True there would let a broken link masquerade as a completed
+    migration."""
+    ra, rb = _resolve_safe(a), _resolve_safe(b)
+    return ra is not None and rb is not None and ra == rb
+
+
 def migrate_legacy_data_dir() -> None:
     """One-time `inter-session` → `hubbub` move, leaving a symlink behind.
 
@@ -187,13 +219,15 @@ def migrate_legacy_data_dir() -> None:
         if _migration_complete(legacy, new):
             return  # a peer finished while we waited
         if legacy.is_symlink():
-            if legacy.resolve() == new.resolve():
+            if _same_target(legacy, new):
                 # Migrated by 0.2.0's first cut, which predates the marker.
                 # Backfill it, or the repair branch below can never fire for
                 # this install if the symlink is later lost.
                 _mark_migrated(new)
             else:
-                _migration_error(f"{legacy} is a symlink to {legacy.resolve()}, "
+                target = _resolve_safe(legacy)
+                where = target if target is not None else "an unresolvable path"
+                _migration_error(f"{legacy} is a symlink to {where}, "
                                 f"not {new}; leaving it alone")
             return
         if legacy.is_dir():
@@ -278,7 +312,7 @@ def _drain_into(src: Path, dst: Path) -> bool:
     a conflict would refuse the migration on exactly the machines it exists
     for, permanently and with no self-repair.
     """
-    if src.resolve() == dst.resolve():
+    if _same_target(src, dst):
         # A peer entry-point completed the whole migration between our
         # is_symlink() and is_dir() checks, so `src` now reaches `dst` through
         # the symlink it just created. Every entry would "collide" with itself
@@ -397,10 +431,9 @@ def _finish_drain(src: Path, dst: Path) -> None:
 
 
 def _legacy_points_at(legacy: Path, new: Path) -> bool:
-    try:
-        return legacy.is_symlink() and legacy.resolve() == new.resolve()
-    except OSError:
-        return False
+    # `_same_target` absorbs both the OSError and the 3.12 symlink-loop
+    # RuntimeError this used to leak; see `_resolve_safe`.
+    return legacy.is_symlink() and _same_target(legacy, new)
 
 
 def _migration_complete(legacy: Path, new: Path) -> bool:
@@ -563,18 +596,37 @@ def _still_on_legacy(legacy: Path, new: Path) -> bool:
         # ensure_token() minted a fresh token there, and every connected peer
         # started getting `unauthorized`. The live token is behind the link.
         #
-        # Only when the link actually leads somewhere, though. `resolve()` is
-        # non-strict, so a dangling link (relocation target deleted, external
-        # volume unmounted) and a symlink loop both resolve happily to a path
-        # that cannot be opened or created — and routing state there replaced a
-        # session that used to run fine on `hubbub/` with `ensure_token`
-        # raising FileExistsError straight out of client.py's startup.
+        # Only when the link actually leads somewhere, though. A dangling link
+        # (relocation target deleted, external volume unmounted) resolves
+        # happily anyway, because `resolve()` is non-strict — and routing state
+        # to a path that cannot be opened replaced a session that used to run
+        # fine on `hubbub/` with `ensure_token` raising FileExistsError straight
+        # out of client.py's startup.
+        #
+        # `is_dir()` is doing more work here than "is it a directory", so do
+        # not reorder it below the resolve(). A *symlink loop* is not handled
+        # by the resolve() at all, and how it misbehaves depends on the
+        # interpreter — measured on this machine, not assumed:
+        #
+        #   CPython 3.12  loop → resolve() raises RuntimeError (not OSError,
+        #                 so the arm below would not have caught it)
+        #   CPython 3.14  loop → resolve() returns the link itself, no raise,
+        #                 so `legacy.resolve() != new.resolve()` says True and
+        #                 we route state at an unusable path
+        #
+        # Both are wrong, differently. `is_dir()` returns False for a loop
+        # (ELOOP) on both, and answering first is the only reason the loop case
+        # is safe. Note the suite runs 3.14 and the shipped monitors run the
+        # system 3.12, so a 3.12-only regression here is invisible to `make
+        # test` — see fork #24.
         if not legacy.is_dir():
             return False
-        try:
-            return legacy.resolve() != new.resolve()
-        except OSError:
-            return True
+        # Unresolvable here means "reachable directory we cannot resolve",
+        # since is_dir() already succeeded — so `not _same_target` says the
+        # live state is still on legacy, the answer that does not fork the
+        # namespace. `_resolve_safe` also absorbs the 3.12 loop RuntimeError,
+        # belt-and-braces in case the is_dir() guard ever moves.
+        return not _same_target(legacy, new)
     return legacy.is_dir()
 
 
