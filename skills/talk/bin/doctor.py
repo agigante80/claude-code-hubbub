@@ -44,6 +44,7 @@ if (not (os.environ.get("HUBBUB_NO_REEXEC")
     os.execv(str(_VENV_PY), [str(_VENV_PY), *sys.argv])
 
 import argparse
+import errno
 import json
 import socket
 from datetime import datetime, timezone
@@ -79,7 +80,7 @@ class Report:
         return 0 if self.worst == OK else 1
 
 
-def _describe_path(p: Path) -> str:
+def _describe_path(p: Path) -> tuple[str, str]:
     """What is actually at this path, distinguishing the cases that matter.
 
     `exists()` follows symlinks and reports False for a dangling one, which is
@@ -87,17 +88,38 @@ def _describe_path(p: Path) -> str:
     `lexists` and reports the link separately from its target.
     """
     if not os.path.lexists(p):
-        return "missing"
+        return OK, "missing"
     if p.is_symlink():
+        if _is_symlink_loop(p):
+            # Detected explicitly rather than inferred from resolve() failing:
+            # that only raises on CPython 3.12: 3.14 returns the link itself,
+            # so the loop was being reported as "leads nowhere" there while the
+            # docs claimed the two were distinguished (fork #29 review).
+            return BAD, "symlink → ITSELF (a loop)"
         target = shared.resolve_safe(p)
         if target is None:
-            return "symlink → unresolvable (loop, or a target we cannot read)"
+            return BAD, "symlink → unresolvable (we cannot read the target)"
         if not p.is_dir():
-            return f"symlink → {target} (not a directory: dangling, or a file)"
-        return f"symlink → {target}"
+            return BAD, f"symlink → {target} (dangling, or a file)"
+        return OK, f"symlink → {target}"
     if p.is_dir():
-        return "real directory"
-    return "a file, not a directory"
+        return OK, "real directory"
+    # Neither a directory nor a symlink. Nothing downstream handles this — the
+    # fork branch finds no token, the dangling branch needs a symlink, the
+    # unreadable probe needs a directory — so it used to report "healthy"
+    # while old builds that hardcode this path could not start and the
+    # migration had no branch that could ever complete.
+    return BAD, "a FILE, not a directory — nothing can use this path"
+
+
+def _is_symlink_loop(p: Path) -> bool:
+    try:
+        os.stat(p)
+    except OSError as e:
+        return e.errno == errno.ELOOP
+    except ValueError:
+        return False
+    return False
 
 
 def _token_of(d: Path) -> str | None:
@@ -120,8 +142,13 @@ def _live_clients(d: Path) -> list[str]:
         return out
     for f in entries:
         try:
-            s = json.loads(f.read_text())
-        except (OSError, json.JSONDecodeError):
+            s = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            # ValueError, not json.JSONDecodeError: a corrupt or foreign
+            # session file raises UnicodeDecodeError during *decode*, which is
+            # a ValueError but not a JSONDecodeError — so it escaped and
+            # collapsed the whole report into "the check itself failed",
+            # discarding every finding already gathered.
             continue
         pid = s.get("listener_pid")
         if isinstance(pid, int) and shared.safe_pid_alive(pid):
@@ -140,7 +167,19 @@ def _port_holder(host: str, port: int) -> tuple[str, str]:
     except OSError:
         # Not a fault: no server runs until a client elects one.
         return OK, "nothing is listening"
-    pid_path = shared.pidfile_path(port, host)
+    # Ask the same question `verify_server_identity` asks, rather than looking
+    # only at the host-qualified name. `_identity_lookup_paths` falls back to
+    # the unqualified `server.<port>.pid` written by older builds, so checking
+    # the qualified path alone raised a false "identity-wipe, kill the
+    # listener" alarm against a perfectly healthy server (fork #29 review).
+    if shared.verify_server_identity(host, port):
+        pid_path, _meta, _legacy = shared._identity_lookup_paths(host, port)
+        try:
+            pid = int(pid_path.read_text().strip())
+            return OK, f"pid {pid}, alive, identity verified"
+        except (OSError, ValueError):
+            return OK, "alive, identity verified"
+    pid_path, _meta, _legacy = shared._identity_lookup_paths(host, port)
     if not pid_path.exists():
         # The exact shape of the pre-flock election bug: a live listener whose
         # identity file was deleted by the loser's cleanup. Every client then
@@ -165,14 +204,24 @@ def build_report(port: int, host: str) -> Report:
     new = shared.default_data_dir()
     override = shared.env("DATA_DIR")
 
-    live = shared.data_dir()
+    # `_still_on_legacy` is pure, so this answers "where is the live state"
+    # without running the migration. `shared.data_dir()` alone would not: it
+    # keys off `_unmigrated_this_run`, which only the migration sets, so it
+    # would always name the new path here.
+    if override:
+        live = Path(override)
+    elif shared._still_on_legacy(legacy, new):
+        live = legacy
+    else:
+        live = new
     r.add(OK, f"live data dir: {live}")
     if override:
         r.add(WARN, f"overridden by HUBBUB_DATA_DIR={override} — the paths "
                     f"below are informational only")
 
-    r.add(OK, f"new path  {new}: {_describe_path(new)}")
-    r.add(OK, f"legacy    {legacy}: {_describe_path(legacy)}")
+    for label, path in (("new path ", new), ("legacy   ", legacy)):
+        level, desc = _describe_path(path)
+        r.add(level, f"{label} {path}: {desc}")
     r.add(OK, f"migration marker: "
               f"{'present' if (new / shared.MIGRATION_MARKER).is_file() else 'absent'}")
 
@@ -236,13 +285,42 @@ def build_report(port: int, host: str) -> Report:
     return r
 
 
+def _default_port() -> int:
+    """Resolve the endpoint the way `client.py` does.
+
+    Hardcoding DEFAULT_PORT meant doctor probed 9473 on an install configured
+    for anything else: it reported "nothing is listening" at severity ok and
+    exited 0 "healthy" **without ever looking at the real bus** — for a command
+    whose entire job is diagnosing a bus behaving impossibly. In the other
+    direction, an unrelated service on 9473 drew the "kill the listener" advice
+    about a process that has nothing to do with hubbub (fork #29 review).
+    """
+    for key in ("CLAUDE_PLUGIN_OPTION_PORT", "HUBBUB_PORT",
+                "INTER_SESSION_PORT"):
+        raw = os.environ.get(key)
+        if raw:
+            try:
+                return int(raw)
+            except ValueError:
+                continue
+    return shared.DEFAULT_PORT
+
+
 def main() -> int:
-    shared.migrate_legacy_data_dir()
     parser = argparse.ArgumentParser(
-        description="Report the state of hubbub's data directory. Read-only.")
-    parser.add_argument("--port", type=int, default=shared.DEFAULT_PORT)
-    parser.add_argument("--host", default="127.0.0.1")
+        description="Report the state of hubbub's data directory. Read-only: "
+                    "it never migrates, moves or creates anything.")
+    parser.add_argument("--port", type=int, default=_default_port())
+    parser.add_argument("--host", default=shared.env("HOST", "127.0.0.1"))
     args = parser.parse_args()
+
+    # Deliberately does NOT call migrate_legacy_data_dir(). Four places
+    # promised read-only while main() opened by running a migration that can
+    # rename directories, drain live entries, create symlinks and park a
+    # remainder — so a user inspecting an unmigrated split had it migrated out
+    # from under them and was then shown the post-mutation state. It could even
+    # warn about "parked leftovers from a partial migration" naming a directory
+    # doctor had created seconds earlier.
 
     try:
         report = build_report(args.port, args.host)

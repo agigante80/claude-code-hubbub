@@ -1770,10 +1770,27 @@ class TestMigrationErrorsPointAtDoctor:
 
     def test_specific_wording_is_not_duplicated(self, capsys):
         """A call site with better advice than the generic line keeps it, and
-        must not get both."""
-        shared._migration_error("run /hubbub:talk doctor to pick a side.")
+        must not get both. Opting out is an explicit flag rather than a
+        substring sniff: the real messages interpolate paths, so a user whose
+        home directory contained "doctor" would have silently lost the
+        pointer, and no test could have seen it."""
+        shared._migration_error("run /hubbub:talk doctor to pick a side.",
+                                hint=False)
         err = capsys.readouterr().err
         assert err.lower().count("doctor") == 1, err
+
+    def test_a_path_containing_doctor_still_gets_the_pointer(self, capsys):
+        """The substring sniff this replaced would have swallowed it."""
+        shared._migration_error("could not read /home/doctorwho/.claude/data")
+        err = capsys.readouterr().err
+        assert "/hubbub:talk doctor" in err
+
+    def test_no_run_on_sentence(self, capsys):
+        """Four call sites end without punctuation; the generic suffix used to
+        butt straight against them."""
+        shared._migration_error("leaving it alone")
+        err = capsys.readouterr().err
+        assert "alone. Run" in err, err
 
     def test_reaches_the_notification_channel_too(self):
         """stderr for the auto-started monitor goes to a file nobody opens, so
