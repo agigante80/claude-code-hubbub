@@ -46,8 +46,15 @@ def _is_our_plugin_root(root: Path) -> bool:
     root, never an explicit one — see `_resolve_monitors_path`.
     """
     try:
-        manifest = json.loads((root / ".claude-plugin" / "plugin.json").read_text())
+        raw = (root / ".claude-plugin" / "plugin.json").read_text(
+            encoding="utf-8", errors="replace")
+        manifest = json.loads(raw)
     except (OSError, json.JSONDecodeError):
+        # `errors="replace"` rather than the ambient locale: a UnicodeDecodeError
+        # is a ValueError, not an OSError, and json.JSONDecodeError does not
+        # cover it either — the failure happens during decode, before parsing.
+        # An undecodable manifest would have produced a traceback instead of
+        # the clean refusal this function exists to give.
         return False
     return isinstance(manifest, dict) and manifest.get("name") == "hubbub"
 
@@ -76,24 +83,60 @@ def _resolve_monitors_path() -> Path:
     """
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_root:
-        p = Path(env_root) / "monitors" / "monitors.json"
-        if p.is_file():
+        root = Path(env_root)
+        p = root / "monitors" / "monitors.json"
+        if p.is_file() and _is_our_plugin_root(root):
             return p
-        sys.stderr.write(
-            f"auto_start: CLAUDE_PLUGIN_ROOT is set to {env_root!r} but "
-            f"{p} does not exist. Refusing to fall back to a script-relative "
-            f"guess — an explicit root that is wrong is a bug to surface, not "
-            f"to work around, and the fallback has silently edited the wrong "
-            f"manifest before.\n"
-        )
+        if not p.is_file():
+            sys.stderr.write(
+                f"auto_start: CLAUDE_PLUGIN_ROOT is set to {env_root!r} but "
+                f"{p} does not exist. Refusing to fall back to a "
+                f"script-relative guess — an explicit root that is wrong is a "
+                f"bug to surface, not to work around, and that fallback has "
+                f"silently edited the wrong manifest before.\n"
+            )
+        else:
+            # "Honour it or fail" and "prove it is ours" are not in conflict.
+            # A developer with `export CLAUDE_PLUGIN_ROOT=~/dev/other-plugin`
+            # in their profile should get a loud refusal, not have us load
+            # someone else's manifest and rely on `_find_entry` to bail.
+            sys.stderr.write(
+                f"auto_start: CLAUDE_PLUGIN_ROOT is set to {env_root!r}, which "
+                f"has a monitors.json but is not a hubbub plugin root (no "
+                f".claude-plugin/plugin.json naming this plugin). Refusing to "
+                f"edit another plugin's manifest.\n"
+            )
         sys.exit(2)
 
-    root = Path(__file__).resolve().parents[3]
+    # `Path.resolve()` follows symlinks, and the documented standalone install
+    # is a symlink: `ln -s <repo>/skills/talk ~/.claude/skills/talk`. Resolving
+    # through it lands on the *repo*, which is a perfectly valid hubbub plugin
+    # root — so the marker check passes and `--off` rewrites the developer's
+    # tracked monitors.json, dirtying their git tree. Same harm as the env-var
+    # case, reached through the symlink instead. Comparing the unresolved root
+    # against the resolved one detects the crossing; when they differ we are
+    # reaching outside the install we were invoked from, which is the thing to
+    # refuse. (Both new copytree tests are real copies, so neither could have
+    # caught this.)
+    resolved_root = Path(__file__).resolve().parents[3]
+    literal_root = Path(os.path.abspath(__file__)).parents[3]
+    crossed_symlink = literal_root.resolve() != resolved_root
+
+    root = resolved_root
     p = root / "monitors" / "monitors.json"
-    if p.is_file() and _is_our_plugin_root(root):
+    if p.is_file() and _is_our_plugin_root(root) and not crossed_symlink:
         return p
 
-    if p.is_file():
+    if crossed_symlink:
+        sys.stderr.write(
+            f"auto_start: {literal_root} is a symlinked skill install pointing "
+            f"into {resolved_root}. auto-start is a plugin feature and this "
+            f"install governs no plugin monitor; editing the manifest over "
+            f"there would only dirty that checkout. Nothing to configure — the "
+            f"skill works as normal and `/hubbub:talk connect` starts its own "
+            f"monitor.\n"
+        )
+    elif p.is_file():
         sys.stderr.write(
             f"auto_start: found {p} but {root} is not a hubbub plugin root "
             f"(no .claude-plugin/plugin.json naming this plugin). Refusing to "

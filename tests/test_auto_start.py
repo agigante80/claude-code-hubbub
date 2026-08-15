@@ -19,6 +19,14 @@ LAZY = "on-skill-invoke:talk"
 
 @pytest.fixture
 def fake_plugin_root(tmp_path: Path) -> Path:
+    # Carries the plugin manifest as well as monitors.json: since fork #16 an
+    # explicit CLAUDE_PLUGIN_ROOT must prove it is *ours* before we edit it, so
+    # a fixture without this would no longer resemble a real install. Verified
+    # the real one at ~/.claude/plugins/marketplaces/hubbub/ has it.
+    claude_plugin = tmp_path / ".claude-plugin"
+    claude_plugin.mkdir()
+    (claude_plugin / "plugin.json").write_text(
+        json.dumps({"name": "hubbub", "version": "0.0.0-test"}) + "\n")
     monitors_dir = tmp_path / "monitors"
     monitors_dir.mkdir()
     (monitors_dir / "monitors.json").write_text(json.dumps([
@@ -287,15 +295,27 @@ class TestRootResolution:
         Note a plugin-marker check would not have prevented it — the repo is a
         perfectly valid hubbub plugin root. The fix is that an explicit
         override is authoritative: honour it or fail, never substitute a guess.
+
+        The restore in `finally` is not belt-and-braces. On a regression this
+        run *has already* flipped `when` in the tracked manifest by the time
+        the assert fires, which would dirty the working tree and feed a
+        mutated manifest to every later test in the same session that reads
+        the real repo. A canary must not damage the thing it watches.
         """
-        before = (REPO / "monitors" / "monitors.json").read_text()
-        r = _run(["--off"], plugin_root=tmp_path / "does-not-exist",
-                 data_dir=tmp_path / "data")
-        assert r.returncode == 2
-        assert "does not exist" in r.stderr
-        assert (REPO / "monitors" / "monitors.json").read_text() == before, (
-            "the repo's own manifest was modified by a run pointed elsewhere"
-        )
+        real = REPO / "monitors" / "monitors.json"
+        before = real.read_text()
+        try:
+            r = _run(["--off"], plugin_root=tmp_path / "does-not-exist",
+                     data_dir=tmp_path / "data")
+            assert r.returncode == 2
+            assert "does not exist" in r.stderr
+            assert real.read_text() == before, (
+                "the repo's own manifest was modified by a run pointed "
+                "elsewhere"
+            )
+        finally:
+            if real.read_text() != before:
+                real.write_text(before)
 
     def test_inferred_root_must_carry_our_plugin_manifest(self, tmp_path: Path):
         """A standalone-skill install lives at ~/.claude/skills/talk/bin/, and
@@ -322,6 +342,76 @@ class TestRootResolution:
         assert r.returncode == 2, r.stdout
         assert "not a hubbub plugin root" in r.stderr
         assert (root / "monitors" / "monitors.json").read_text() == before
+
+    def test_symlinked_standalone_does_not_reach_into_the_repo(
+            self, tmp_path: Path):
+        """The install CLAUDE.md documents is a *symlink*:
+        `ln -s <repo>/skills/talk ~/.claude/skills/talk`. `Path.resolve()`
+        follows it, so `parents[3]` was the repo — a perfectly valid hubbub
+        plugin root, so the marker check passed and `--off` rewrote the
+        developer's tracked monitors.json. Same harm as the bogus-env-var
+        case, reached through the symlink instead.
+
+        Neither copytree test above can catch this; they are real copies.
+        """
+        home = tmp_path / "home"
+        (home / ".claude" / "skills").mkdir(parents=True)
+        (home / ".claude" / "skills" / "talk").symlink_to(
+            REPO / "skills" / "talk")
+        real = REPO / "monitors" / "monitors.json"
+        before = real.read_text()
+        try:
+            r = subprocess.run(
+                [sys.executable,
+                 str(home / ".claude" / "skills" / "talk" / "bin" /
+                     "auto_start.py"), "--off"],
+                capture_output=True, text=True,
+                env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
+                     "HUBBUB_DATA_DIR": str(tmp_path / "data")},
+            )
+            assert r.returncode == 2, r.stdout
+            assert "symlinked skill install" in r.stderr
+            assert real.read_text() == before, (
+                "a symlinked standalone install edited the repo it points at"
+            )
+        finally:
+            if real.read_text() != before:
+                real.write_text(before)
+
+    def test_explicit_root_must_also_be_ours(self, tmp_path: Path):
+        """"Honour it or fail" and "prove it is ours" are not in conflict. A
+        developer with `export CLAUDE_PLUGIN_ROOT=~/dev/other-plugin` in their
+        profile should get a loud refusal, not have us load a foreign manifest
+        and rely on `_find_entry` to bail out afterwards."""
+        foreign = tmp_path / "other-plugin"
+        (foreign / ".claude-plugin").mkdir(parents=True)
+        (foreign / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "something-else"}))
+        (foreign / "monitors").mkdir()
+        (foreign / "monitors" / "monitors.json").write_text(
+            json.dumps([{"name": "hubbub-client", "when": "always"}]))
+        before = (foreign / "monitors" / "monitors.json").read_text()
+        r = _run(["--off"], foreign, data_dir=tmp_path / "data")
+        assert r.returncode == 2
+        assert "not a hubbub plugin root" in r.stderr
+        assert (foreign / "monitors" / "monitors.json").read_text() == before
+
+    def test_undecodable_manifest_refuses_rather_than_crashes(
+            self, tmp_path: Path):
+        """`UnicodeDecodeError` is a ValueError, not an OSError, and
+        JSONDecodeError does not cover it either — the failure happens during
+        decode, before parsing. An undecodable plugin.json used to produce a
+        traceback instead of the clean refusal."""
+        root = tmp_path / "weird"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_bytes(b"\xff\xfe\x00bad")
+        (root / "monitors").mkdir()
+        (root / "monitors" / "monitors.json").write_text(
+            json.dumps([{"name": "hubbub-client", "when": "always"}]))
+        r = _run(["--status"], root, data_dir=tmp_path / "data")
+        assert r.returncode == 2
+        assert "Traceback" not in r.stderr
+        assert "not a hubbub plugin root" in r.stderr
 
     def test_standalone_install_says_so_instead_of_hunting(self, tmp_path: Path):
         """No manifest anywhere: the answer is "there is nothing to
