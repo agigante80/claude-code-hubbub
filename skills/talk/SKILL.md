@@ -438,6 +438,33 @@ once its *own* user invoked the skill — backwards for a system whose
 point is being driven from another session. Turn it off with
 `/hubbub:talk auto-start off` if you'd rather sessions opt in.
 
+### The `auto_start` plugin setting
+
+Installing the plugin also asks, as a `userConfig` boolean, whether
+sessions should join automatically. That is the same choice, offered
+where the user can actually see it rather than only reachable by knowing
+this command exists.
+
+It is enforced in `client.py`, not in the manifest: `when` is read by
+Claude Code's monitor scheduler before any hubbub code runs, so no env
+var can change it, and `${user_config.*}` substitution is forbidden here
+because it breaks `--plugin-dir` local-dev mode. So the monitor always
+starts and exits on its own when the setting says to.
+
+Precedence, when reporting state to the user:
+
+1. `<data-dir>/autostart-off` — the durable opt-out. Highest; it is the
+   later explicit act and it survives `/plugin update`.
+2. `auto_start: false` — the install-time answer.
+3. Otherwise on.
+
+**`auto-start on` cannot override an `auto_start: false`.** It will write
+the manifest and clear the opt-out, both successfully, and the monitor
+will still exit. The command detects this and reports `NOT applied` with
+a pointer to `/plugin` — surface that verbatim rather than reporting
+success, because everything else about the command's output looks like it
+worked.
+
 ## Truncated messages
 
 Long messages (whose body exceeds the ~400-char stdout cap) arrive in

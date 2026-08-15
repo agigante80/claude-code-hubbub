@@ -74,7 +74,7 @@ Makefile bootstraps it on first use (uv preferred, stdlib `venv` as
 fallback). System Python is never touched.
 
 ```bash
-make test                                    # full suite (~70 s, 369 tests)
+make test                                    # full suite (~70 s)
 make test-fast                               # skip the 19 @pytest.mark.slow tests
 make clean                                   # remove .venv
 ```
@@ -88,7 +88,7 @@ To run pytest with non-make flags, use the venv's pytest directly:
 ```
 
 Two concurrent pytest sessions are **expected to pass** as of the #17 fix —
-verified by running two full suites at once (369 each, both green). Each
+verified by running two full suites at once, both green. Each
 session gets its own `tmp_data_dir`, so they do not contend for *state*; what
 broke them was contention for *CPU*, against subprocess tests that asserted on
 fixed `time.sleep()` durations.
@@ -131,7 +131,7 @@ by hand.
 
 ### Suite status
 
-Green as of 2026-08-15: `369 passed in ~66 s` on Linux 7.0 / CPython
+Green as of 2026-08-15: `389 passed in ~66 s` on Linux 7.0 / CPython
 3.14. The four tests that used to fail all start **two listeners at
 once**, and they were reporting the real server-election race — fixed
 in `0e33123` by the election flock (see the election invariant below).
@@ -355,6 +355,19 @@ defaults read those. **Do not add `--port` or
 or the SKILL.md `Monitor` command** — they silently nullify the
 user's plugin config. Regression test:
 `test_plugin_manifest.py::test_command_does_not_hardcode_userconfig_args`.
+
+**`auto_start` is the case this rule did not anticipate, and it is worse
+than an inconvenience.** `port` and `idle_shutdown_minutes` work as env
+vars because *our* argparse reads them. `when` is read by CC's monitor
+scheduler *before any hubbub code runs*, so no env var can reach it —
+and the substitution that could is the one that breaks local-dev mode.
+So the manifest stays `when: "always"` unconditionally and the setting
+is enforced in `client.py::_autostart_wanted`: the monitor starts and
+then exits on its own. Don't "fix" the apparent inconsistency by
+templating `when`, and don't read the always-on manifest as meaning the
+user never got a choice. Precedence is opt-out file → userConfig →
+default on; `auto-start on` therefore cannot override a userConfig
+`false`, which `auto_start.py` reports rather than hides (fork #22).
 
 ### Roles: agent vs control
 

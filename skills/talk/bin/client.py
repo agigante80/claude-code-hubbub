@@ -493,6 +493,54 @@ def _env_float(*keys, default: float) -> float:
     return default
 
 
+_FALSEY = frozenset({"0", "false", "no", "off"})
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _env_bool(*keys, default: bool) -> bool:
+    """First key that parses as a boolean wins; unparseable values are skipped.
+
+    Deliberately strict rather than using Python truthiness: `bool("false")` is
+    True, and a userConfig boolean arrives here as the *string* CC rendered it
+    into `CLAUDE_PLUGIN_OPTION_*`. Guessing wrong in the permissive direction
+    would silently ignore someone's decision to keep their sessions off the
+    bus, which is the one outcome this setting exists to prevent.
+    """
+    for k in keys:
+        v = os.environ.get(k)
+        if v is None:
+            continue
+        v = v.strip().lower()
+        if v in _FALSEY:
+            return False
+        if v in _TRUTHY:
+            return True
+    return default
+
+
+def _autostart_wanted() -> bool:
+    """Should a CC-started monitor stay up? Only meaningful with --from-monitor.
+
+    Precedence, and it is deliberately not symmetric:
+
+      1. `<data-dir>/autostart-off` present → off. Highest, because it is an
+         explicit later act and it must survive `/plugin update`.
+      2. `auto_start` userConfig false → off. The install-time answer.
+      3. Otherwise on.
+
+    There is no "explicitly on" marker, so `auto-start on` cannot override a
+    userConfig `false` — it deletes the off-marker and rewrites the manifest,
+    and the monitor still exits. That dead end is real; `auto_start.py` says so
+    out loud rather than letting the command look like it worked. Adding a
+    third state here would be the alternative, and it did not seem worth a
+    second marker file for a setting the user can change where they set it.
+    """
+    if shared.autostart_optout_path().exists():
+        return False
+    return _env_bool("CLAUDE_PLUGIN_OPTION_AUTO_START", "HUBBUB_AUTO_START",
+                     "INTER_SESSION_AUTO_START", default=True)
+
+
 def main() -> int:
     # Our stdout is the notification channel, so hard migration failures —
     # the ones that say "resolve by hand" — should reach it rather than dying
@@ -535,10 +583,21 @@ def main() -> int:
                         help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    if args.from_monitor and shared.autostart_optout_path().exists():
-        # `/hubbub:talk auto-start off`. The shipped monitors.json says
-        # "always" and a plugin update restores it, so the opt-out has to be
-        # enforced here rather than trusted to survive in the plugin dir.
+    if args.from_monitor and not _autostart_wanted():
+        # Two independent ways to be off, checked together because they have
+        # to agree on one answer:
+        #
+        #   1. `/hubbub:talk auto-start off` writes `<data-dir>/autostart-off`.
+        #      The shipped monitors.json says "always" and a plugin update
+        #      restores it, so the opt-out has to be enforced here rather than
+        #      trusted to survive in the plugin dir.
+        #   2. The `auto_start` userConfig, answered at install time and
+        #      delivered as CLAUDE_PLUGIN_OPTION_AUTO_START. `when` is read by
+        #      CC's monitor scheduler before any of our code runs, so we cannot
+        #      express this by templating the manifest — and `${user_config.*}`
+        #      substitution is forbidden anyway because it breaks
+        #      `--plugin-dir` mode. The monitor therefore starts and exits.
+        #
         # Checked before the migration errors are replayed: "off" has to mean
         # silent, and a stuck migration would otherwise notify this session at
         # every open. They are on stderr regardless.
