@@ -75,7 +75,7 @@ fallback). System Python is never touched.
 
 ```bash
 make test                                    # full suite (~75 s, 367 tests)
-make test-fast                               # skip the 17 @pytest.mark.slow tests
+make test-fast                               # skip the 19 @pytest.mark.slow tests
 make clean                                   # remove .venv
 ```
 
