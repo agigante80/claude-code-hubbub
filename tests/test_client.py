@@ -407,14 +407,21 @@ class TestNameCollisionAutoRetry:
                 except (OSError, ValueError):
                     pass
 
-    def test_exhausted_retries_stops(self, tmp_data_dir, free_port):
-        """If server keeps rejecting (we mock with a low retry budget), the
-        client surfaces the failure and exits 0 instead of looping."""
-        # Spawn three listeners with the same name to exhaust the retry budget
-        # of the third one. The third client tries: alpha → alpha-2 → alpha-3,
-        # but alpha-2 is also taken by then. With max_collision_retries=3 we
-        # can't reliably trigger exhaustion in this scenario, so we instead
-        # set a low max via env override.
+    def test_collision_retry_renames_rather_than_exiting(
+            self, tmp_data_dir, free_port):
+        """Three sessions contending for one name all survive, as beta,
+        beta-2 and beta-3.
+
+        Renamed from `test_exhausted_retries_stops` (fork #25). That name, its
+        docstring ("surfaces the failure and exits 0") and its comment ("we
+        instead set a low max via env override") all described a test of retry
+        *exhaustion* — but no override existed to set, none was set, and the
+        body asserts every listener is *alive*, which is the opposite. What it
+        genuinely checks is worth keeping, and matters more since
+        `when: "always"` made simultaneous registration ordinary (#20).
+
+        Actual exhaustion is `test_exhausted_retries_surfaces_and_stops`.
+        """
         env = os.environ.copy()
         env["INTER_SESSION_DATA_DIR"] = str(tmp_data_dir)
         env["PYTHONPATH"] = str(REPO)
@@ -445,6 +452,66 @@ class TestNameCollisionAutoRetry:
                     p.kill()
             # Endpoint-scoped name: `server.pid` never matched, so this
             # cleanup silently leaked the elected server (fork #17).
+            pid_path = tmp_data_dir / f"server.{free_port}.pid"
+            if pid_path.exists():
+                try:
+                    os.kill(int(pid_path.read_text().strip()), 9)
+                except (OSError, ValueError):
+                    pass
+
+    def test_exhausted_retries_surfaces_and_stops(self, tmp_data_dir, free_port):
+        """The path the old test's docstring described but never exercised.
+
+        With the budget set to 0 the very first collision is terminal, so this
+        is deterministic rather than depending on how four sessions interleave.
+        The client must say so on stdout and exit — not loop, and not fail
+        silently, because a session that never joined is invisible in `list`
+        with nothing to explain why. SKILL.md documents a user-facing reaction
+        to this exact line.
+        """
+        env = os.environ.copy()
+        env["INTER_SESSION_DATA_DIR"] = str(tmp_data_dir)
+        env["PYTHONPATH"] = str(REPO)
+
+        first = None
+        second = None
+        try:
+            env_a = env.copy()
+            env_a["INTER_SESSION_PPID_OVERRIDE"] = "51001"
+            first = subprocess.Popen(
+                [sys.executable, "-u", str(BIN_DIR / "client.py"),
+                 "--port", str(free_port), "--name", "gamma"],
+                env=env_a, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            assert _wait_for(
+                (tmp_data_dir / "clients" / "51001.session").exists
+            ), "first listener never registered"
+
+            env_b = env.copy()
+            env_b["INTER_SESSION_PPID_OVERRIDE"] = "51002"
+            env_b["HUBBUB_MAX_COLLISION_RETRIES"] = "0"
+            second = subprocess.Popen(
+                [sys.executable, "-u", str(BIN_DIR / "client.py"),
+                 "--port", str(free_port), "--name", "gamma"],
+                env=env_b, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            line = waiting.read_line(second)
+            assert "taken after" in line, f"got {line!r}"
+            assert "connect <other-name>" in line, f"got {line!r}"
+            second.wait(timeout=15)
+            assert first.poll() is None, "the incumbent should be unaffected"
+        finally:
+            for p in (first, second):
+                if p is None:
+                    continue
+                if p.poll() is None:
+                    p.terminate()
+                    try:
+                        p.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        p.kill()
             pid_path = tmp_data_dir / f"server.{free_port}.pid"
             if pid_path.exists():
                 try:
