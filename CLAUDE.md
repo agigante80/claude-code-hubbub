@@ -146,7 +146,7 @@ by hand.
 
 ### Suite status
 
-Green as of 2026-08-15: `403 passed in ~68 s` on Linux 7.0 / CPython
+Green as of 2026-08-15: `404 passed in ~65 s` on Linux 7.0 / CPython
 3.14. The four tests that used to fail all start **two listeners at
 once**, and they were reporting the real server-election race — fixed
 in `0e33123` by the election flock (see the election invariant below).
@@ -529,6 +529,16 @@ prose so prose edits can't accidentally drop a guardrail.
   pytest parent pid, which would collide on the ppid flock. Set
   `HUBBUB_PPID_OVERRIDE` to give each subprocess a distinct
   pseudo-ppid.
+- **Collision-retry budget**: `HUBBUB_MAX_COLLISION_RETRIES` (default 3).
+  Set it to `0` to make the first name collision terminal, which is the
+  only deterministic way to exercise retry exhaustion — otherwise you
+  need four sessions racing one cwd-derived name and the outcome depends
+  on their interleaving. Same shape and purpose as the ppid override.
+- **Waits**: `tests/waiting.py`. `wait_for(predicate)` for a condition,
+  `read_line(proc)` for a pipe read with an enforceable deadline. Never
+  a bare `time.sleep()` before an assertion, and never a bare
+  `proc.stdout.readline()` — see the concurrency note under Common
+  commands for why the latter hangs the suite rather than failing it.
 - **Slow tests** (`@pytest.mark.slow`): subprocess-spawning, >1 s.
 
 ## Don't

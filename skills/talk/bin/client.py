@@ -660,6 +660,18 @@ def main() -> int:
         host=args.host, port=args.port, name=final_name, label=final_label,
         idle_shutdown_minutes=args.idle_shutdown_minutes,
         verbose=args.verbose, from_monitor=args.from_monitor,
+        # Test/debug knob, same shape and purpose as HUBBUB_PPID_OVERRIDE.
+        # Exhaustion is otherwise very hard to drive: with a budget of 3 you
+        # need four sessions racing one cwd-derived name, and the outcome
+        # depends on their interleaving. #20 wants to probe registration under
+        # concurrency and needs this to be deterministic. A test comment
+        # claimed this override already existed for two releases before
+        # anyone checked (fork #25).
+        max_collision_retries=_env_int(
+            "HUBBUB_MAX_COLLISION_RETRIES",
+            "INTER_SESSION_MAX_COLLISION_RETRIES",
+            default=3,
+        ),
     )
 
     loop = asyncio.new_event_loop()
