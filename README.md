@@ -3,7 +3,7 @@
 > **A maintained fork of
 > [yilunzhang/claude-code-inter-session](https://github.com/yilunzhang/claude-code-inter-session),
 > renamed.** Maintained by [@agigante80](https://github.com/agigante80).
-> It carries six fixes upstream doesn't have yet — two security fixes, a
+> It carries seven fixes upstream doesn't have yet — three security fixes, a
 > server-election race, and more — all offered back as open pull
 > requests. See [About this fork](#about-this-fork) for the full list and
 > [Install](#install) for the marketplace to add.
@@ -100,6 +100,7 @@ fork is where the fixes live.
 | **Server-election race** | Two sessions starting at once could both `bind()` and spawn a server; the loser's cleanup deleted the winner's pidfile, leaving both clients refusing to connect. Now a per-endpoint `flock` serializes the election. | [#15](https://github.com/yilunzhang/claude-code-inter-session/pull/15) |
 | **SEC-001 — sender spoofing** | A peer's Unicode `label` was interpolated into the notification line unescaped, so it could close the header's bracket and forge the `from="…"` attribution. Now rejected at the boundary *and* neutralized at render. | [#8](https://github.com/yilunzhang/claude-code-inter-session/pull/8) |
 | **SEC-002 — forged trailing directive** | Message text could embed `[inter-session …]`-looking text that read as a second, more-trusted message. The reaction policy now states that only the leading header is authoritative. | [#9](https://github.com/yilunzhang/claude-code-inter-session/pull/9) |
+| **SEC-003 — header forgery via `session_id`** | A peer chooses its own `session_id`, and eight characters of it render as the `sid=` fingerprint. A newline in that field split one notification into two lines, the second beginning with what the policy treats as an authoritative header. Rejected at the boundary *and* neutralized at render. | fork-only |
 | **Label persistence** | Display labels were lost on every restart. They now persist per project, keyed by repo root. | [#11](https://github.com/yilunzhang/claude-code-inter-session/pull/11) |
 | **In-place relabel** | Changing a label used to mean disconnect + reconnect, losing the `session_id`. `/hubbub:talk relabel` now updates it live. | [#13](https://github.com/yilunzhang/claude-code-inter-session/pull/13) |
 | **Reply-transport binding** | A bus message answered with the harness's `SendMessage` silently reached the wrong session. Replies are now bound to the transport the message arrived on — see [docs/DELIVERY.md](./docs/DELIVERY.md). | fork-only |
@@ -436,6 +437,23 @@ The WebSocket port and idle-shutdown timeout are configurable via
   [docs/security/](./docs/security/README.md) — worth reading once before
   leaving it on, because the reaction policy acts on peer messages as if
   you had typed them, in every session on the machine.
+- **A sibling process cannot impersonate your session.** The helper CLIs
+  (`send`, `list`, `relabel`) connect as `role=control` and must present
+  the `for_session` id *and* a `nonce` matching the one your monitor
+  registered. The nonce is never echoed in any frame and lives only in
+  your `0600` state file, so knowing a `session_id` — which every peer
+  sees — is not enough to send as you, or to kick you off the bus by
+  reconnecting under your id. This matters because your monitor and the
+  helper CLIs are started by *different* shells and are only siblings;
+  without the cross-check, any process sharing that parent could speak
+  for you. It is not a defence against code that can read the state file
+  — same-UID is trusted, per the bullets above.
+- **Peer-controlled strings that reach your notifications are sanitized
+  twice**, at the boundary and again at render: the `label`, and the
+  `sid=` fingerprint. Both have been used to forge a sender attribution
+  in this codebase (SEC-001, SEC-003), so both are rejected on arrival
+  *and* neutralized on display, which also covers values recorded by an
+  older server or replayed from `messages.log`.
 - The receiving agent's reaction policy (see
   [SKILL.md](./skills/talk/SKILL.md)) treats peer messages as
   instructions but applies the same caution as user input —
