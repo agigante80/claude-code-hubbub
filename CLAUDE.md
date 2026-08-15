@@ -74,9 +74,12 @@ Makefile bootstraps it on first use (uv preferred, stdlib `venv` as
 fallback). System Python is never touched.
 
 ```bash
-make test                                    # full suite (~70 s)
+make test                                    # full suite (~70 s), .venv
 make test-fast                               # skip the 19 @pytest.mark.slow tests
-make clean                                   # remove .venv
+make test-system                             # same suite under the SYSTEM python3
+make test-both                               # both interpreters, sequentially
+make versions                                # which Python each venv resolves to
+make clean                                   # remove both venvs
 ```
 
 To run pytest with non-make flags, use the venv's pytest directly:
@@ -114,14 +117,18 @@ That difference is not cosmetic: `Path.resolve()` raises `RuntimeError` on a
 symlink loop in 3.12 and silently returns the link in 3.14, which hid a real
 startup crash from `make test` until #19.
 
+The cause is in the Makefile: `make test` bootstraps `.venv` with uv when uv
+is present, and **uv supplies its own Python** rather than the system one.
+Without uv it falls back to `python3 -m venv` and the two agree — so whether
+your suite matches production depends on whether you have uv installed, which
+is not a property anyone reasons about.
+
 So **a green `make test` is not by itself evidence that the shipped code is
-green**, for anything touching path resolution. There is deliberately no
-second command here yet: running the suite under the system interpreter needs
-pytest + websockets + psutil installed there, which contradicts "System Python
-is never touched" above and fails on a fresh clone. Giving it a supported
-form — a `make test-system` that provisions its own venv from `python3` rather
-than from uv — is #24. Until that exists, reason about version-sensitive
-behaviour explicitly rather than assuming the suite covers it.
+green.** `make test-system` (#24) builds a second venv, `.venv-system`, from
+`python3` explicitly and never uv, and runs the same suite there. Use
+`make test-both` before shipping, and always for changes touching path
+resolution, subprocess spawning, or anything else where CPython versions have
+drifted. `make versions` prints what each venv actually resolved to.
 
 No build step, no linter configured. Runtime deps live at
 `skills/talk/requirements.txt` (websockets + psutil); dev
