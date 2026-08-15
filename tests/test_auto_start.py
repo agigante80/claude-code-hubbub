@@ -431,6 +431,65 @@ class TestRootResolution:
         assert "nothing to configure" in r.stderr
 
 
+class TestGitWorktreeGuard:
+    """fork #29. The symlink guard compares invocation path against resolved
+    path, so it cannot fire when the caller passes an already-resolved path
+    (`readlink -f`, `cd -P`, or a harness that prints realpaths). At that point
+    the two invocations are byte-identical and nothing about the *path* can
+    tell them apart.
+
+    What is still knowable is what we are about to write to. The harm in #16
+    was dirtying a tracked working tree, and the real target — the plugin cache
+    at `~/.claude/plugins/cache/hubbub/hubbub/<v>` — carries no `.git`, while a
+    development checkout does.
+    """
+
+    def _repo_like(self, tmp_path: Path) -> Path:
+        root = tmp_path / "checkout"
+        (root / ".git").mkdir(parents=True)
+        (root / ".claude-plugin").mkdir()
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "hubbub"}))
+        (root / "monitors").mkdir()
+        (root / "monitors" / "monitors.json").write_text(json.dumps([
+            {"name": "hubbub-client", "command": "x", "when": ALWAYS}
+        ]))
+        return root
+
+    def test_refuses_to_dirty_a_tracked_checkout(self, tmp_path: Path):
+        root = self._repo_like(tmp_path)
+        before = (root / "monitors" / "monitors.json").read_text()
+        r = _run(["--off"], root, data_dir=tmp_path / "d")
+        assert r.returncode == 1, r.stdout
+        assert "NOT applied" in r.stdout
+        assert "git work tree" in r.stdout
+        assert (root / "monitors" / "monitors.json").read_text() == before
+
+    def test_force_overrides_for_local_dev(self, tmp_path: Path):
+        """`--plugin-dir <repo>` is a legitimate install where the checkout
+        really is the plugin, so the guard has to be escapable — knowingly."""
+        root = self._repo_like(tmp_path)
+        r = _run(["--off", "--force"], root, data_dir=tmp_path / "d")
+        assert r.returncode == 0, r.stdout + r.stderr
+        data = json.loads((root / "monitors" / "monitors.json").read_text())
+        assert data[0]["when"] == LAZY
+
+    def test_status_is_unaffected(self, tmp_path: Path):
+        """Read-only, so there is nothing to dirty and no reason to refuse."""
+        root = self._repo_like(tmp_path)
+        r = _run(["--status"], root, data_dir=tmp_path / "d")
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "auto-start:" in r.stdout
+
+    def test_a_real_install_is_not_a_worktree_so_is_unaffected(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """The guard must not fire for the case it is protecting. Measured:
+        the installed plugin cache has no `.git`."""
+        r = _run(["--off"], fake_plugin_root, data_dir=tmp_path / "d")
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "git work tree" not in r.stdout
+
+
 class TestPartialFailure:
     """The two halves — the plugin manifest and the durable data-dir flag —
     must be independent. Ordering them only chooses which one silently gets
