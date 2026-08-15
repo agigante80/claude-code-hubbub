@@ -131,13 +131,21 @@ def cmd_status() -> int:
     path = _resolve_monitors_path()
     entry = _find_entry(_load(path))
     when = entry.get("when", "always")
-    if when == ALWAYS:
+    optout = shared.autostart_optout_path()
+    # The headline is what gets summarized — SKILL.md has the agent surface
+    # this output, and a reader stops at the first line. So it must reflect
+    # the *effective* state, not just `when`: printing "ON" and contradicting
+    # it three lines down means the contradiction is the part that gets
+    # dropped.
+    forced_off = optout.exists() or _env_says_off()
+    if forced_off:
+        label = "OFF (forced; see below — `when` alone does not decide this)"
+    elif when == ALWAYS:
         label = "ON  (auto-start at every session)"
     elif when == LAZY:
         label = "OFF (no auto-start; /hubbub:talk connect still works)"
     else:
         label = f"CUSTOM ({when})"
-    optout = shared.autostart_optout_path()
     print(f"auto-start: {label}")
     print(f"  when: {when}")
     print(f"  file: {path}")
@@ -148,30 +156,38 @@ def cmd_status() -> int:
             # opt-out is what is actually in force.
             print("  note: monitors.json says always, but the opt-out above "
                   "wins — the monitor exits immediately at session open.")
-    if _userconfig_says_off():
-        # Third source of truth, and the only one this command cannot change.
-        # Reporting it matters more than it looks: without this line, a user
-        # who chose "no" at install and later runs `auto-start on` gets a
-        # success message and a monitor that keeps exiting, with nothing
-        # anywhere connecting the two.
-        print("  plugin config: auto_start is set to false")
+    if _env_says_off():
+        # A second source of truth this command cannot write. Reporting it
+        # matters more than it looks: without this line, a user with the env
+        # var exported gets a success message from `auto-start on` and a
+        # monitor that keeps exiting, with nothing connecting the two.
+        print(f"  env: {_env_says_off()} is set to a false value")
         if not optout.exists():
             print("  note: the monitor exits at session open because of that "
-                  "setting, whatever `when` says. This command cannot change "
-                  "it — use /plugin to edit the hubbub config.")
+                  "variable, whatever `when` says. This command cannot change "
+                  "it — unset it in the shell that starts Claude Code.")
     return 0
 
 
-def _userconfig_says_off() -> bool:
-    """Is the `auto_start` userConfig explicitly false in this process's env?
+_FALSEY = {"0", "false", "no", "off"}
+# Must stay the same key list `client.py::_autostart_wanted` consults, or this
+# command reports "on" for a monitor that is exiting. Deliberately NOT
+# including CLAUDE_PLUGIN_OPTION_AUTO_START: CC injects those for hooks only,
+# never for monitors, so a userConfig switch would be inert (fork #22, #28).
+_AUTOSTART_ENV_KEYS = ("HUBBUB_AUTO_START", "INTER_SESSION_AUTO_START")
 
-    Only meaningful when CC injected it, which it does for the monitor and for
-    skill-invoked commands in an installed plugin. Absent in `--plugin-dir`
-    local-dev mode, where CC does not prompt for userConfig at all — so absence
-    must read as "no opinion", never as "off".
+
+def _env_says_off() -> str | None:
+    """Name of the first env key explicitly turning auto-start off, else None.
+
+    Returns the key rather than a bool so the message can name it — "unset it"
+    is not actionable advice without saying which one.
     """
-    v = os.environ.get("CLAUDE_PLUGIN_OPTION_AUTO_START")
-    return v is not None and v.strip().lower() in {"0", "false", "no", "off"}
+    for k in _AUTOSTART_ENV_KEYS:
+        v = os.environ.get(k)
+        if v is not None and v.strip().lower() in _FALSEY:
+            return k
+    return None
 
 
 def cmd_set(target: str) -> int:
@@ -186,6 +202,21 @@ def cmd_set(target: str) -> int:
     monitors = _load(path)
     entry = _find_entry(monitors)
     prev = entry.get("when", "always")
+
+    # Same principle one step further out: refuse an `--on` that cannot take
+    # effect BEFORE mutating anything. Detecting it afterwards and printing
+    # "NOT applied" would be a lie in the worst direction — by then
+    # `_set_optout(False)` has already deleted the durable opt-out, so a
+    # command that reported doing nothing has in fact destroyed the user's
+    # recorded choice, and a later change to the env would silently make the
+    # machine always-on with nothing left saying they had opted out.
+    blocking_key = _env_says_off() if target == ALWAYS else None
+    if blocking_key:
+        print(f"auto-start: {target!r} NOT applied — {blocking_key} is set to "
+              f"a false value in this environment, which this command cannot "
+              f"change. Nothing was modified; unset it in the shell that "
+              f"starts Claude Code, then re-run.")
+        return 1
 
     # The two halves are applied independently — neither may abort the other —
     # but the *order* is not symmetric, because only one of them destroys
@@ -230,11 +261,9 @@ def cmd_set(target: str) -> int:
         # at once even when CC still starts it.
         effective = optout_present or when_now == LAZY
     else:
-        # On needs all three: a lingering flag would exit the monitor CC just
-        # spawned, and so would a userConfig `auto_start: false` — which this
-        # command has no way to change, so claiming success would be a lie.
-        effective = ((not optout_present) and when_now == ALWAYS
-                     and not _userconfig_says_off())
+        # On needs both. The env-var case is already handled by the early
+        # refusal above, which returns before reaching here.
+        effective = (not optout_present) and when_now == ALWAYS
 
     failed = ([] if manifest_ok else ["the plugin manifest"]) + \
             ([] if optout_ok else ["the saved setting"])
@@ -250,10 +279,6 @@ def cmd_set(target: str) -> int:
         # change that is not in force is worse than saying nothing, and
         # SKILL.md has the agent surface stdout.
         print(f"auto-start: {target!r} NOT applied{detail}")
-        if target == ALWAYS and _userconfig_says_off():
-            print("  reason: the plugin's auto_start config is false, which "
-                  "this command cannot change. Edit it with /plugin — the "
-                  "manifest and the saved setting are already correct.")
     elif when_now != prev:
         print(f"auto-start: {prev!r} -> {target!r}{detail}")
         print("Reload to apply: /reload-plugins (or open a new Claude Code session).")

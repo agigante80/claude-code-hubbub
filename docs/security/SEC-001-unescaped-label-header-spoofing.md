@@ -2,7 +2,8 @@
 
 | Field | Value |
 | :--- | :--- |
-| **Status** | Open |
+| **Status** | Fixed in this fork (`validate_label` rejects `"[]` at the boundary; `sanitize_label_for_display` neutralises them at render). Still open upstream — PR [#8](https://github.com/yilunzhang/claude-code-inter-session/pull/8). |
+| **Regression test** | `test_client.py::test_label_cannot_forge_header` |
 | **Component** | `skills/talk/bin` (message rendering) |
 | **Category** | Output encoding / injection (sender-attribution spoofing) |
 | **Reporter** | Security review, 2026-07-12 |

@@ -160,45 +160,79 @@ class TestResolveLabel:
             client_mod._resolve_label("a" * (shared.LABEL_MAX_CP + 1), None, str(tmp_path))
 
 
-class TestAutostartWanted:
-    """fork #22: `_autostart_wanted` is what actually enforces the setting,
-    since `when` is read by CC before any of our code runs."""
+@pytest.fixture
+def clean_autostart_env(monkeypatch):
+    """Clear every key `_autostart_wanted` consults.
 
-    def test_default_is_on(self, tmp_data_dir, monkeypatch):
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_AUTO_START", raising=False)
+    `HUBBUB_AUTO_START` is a supported switch, so a developer may well have it
+    exported — and then the default-case tests would read their shell instead
+    of the code under test. conftest only scrubs the *_DATA_DIR pair.
+    """
+    for k in ("HUBBUB_AUTO_START", "INTER_SESSION_AUTO_START",
+              "CLAUDE_PLUGIN_OPTION_AUTO_START"):
+        monkeypatch.delenv(k, raising=False)
+
+
+class TestAutostartWanted:
+    """fork #22, after the userConfig route was found inert.
+
+    `when` is read by CC's monitor scheduler before any hubbub code runs, so
+    the setting has to be enforced here. What it may *not* consult is
+    `CLAUDE_PLUGIN_OPTION_AUTO_START`: CC injects those for hooks only, never
+    for monitors — verified against the bundle and against two live monitors'
+    `/proc/<pid>/environ`, which held no `CLAUDE_PLUGIN_*` at all.
+    """
+
+    def test_default_is_on(self, tmp_data_dir, clean_autostart_env):
         assert client_mod._autostart_wanted() is True
 
     @pytest.mark.parametrize("value", ["false", "FALSE", " off ", "0", "no"])
-    def test_falsey_spellings_turn_it_off(self, tmp_data_dir, monkeypatch, value):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", value)
+    def test_falsey_spellings_turn_it_off(
+            self, tmp_data_dir, clean_autostart_env, monkeypatch, value):
+        monkeypatch.setenv("HUBBUB_AUTO_START", value)
         assert client_mod._autostart_wanted() is False
 
     @pytest.mark.parametrize("value", ["true", "1", "ON", "yes"])
-    def test_truthy_spellings_leave_it_on(self, tmp_data_dir, monkeypatch, value):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", value)
+    def test_truthy_spellings_leave_it_on(
+            self, tmp_data_dir, clean_autostart_env, monkeypatch, value):
+        monkeypatch.setenv("HUBBUB_AUTO_START", value)
         assert client_mod._autostart_wanted() is True
 
-    def test_unparseable_value_does_not_disable(self, tmp_data_dir, monkeypatch):
+    def test_unparseable_value_does_not_disable(
+            self, tmp_data_dir, clean_autostart_env, monkeypatch):
         """`bool("banana")` is True and `bool("false")` is also True, so the
         parse has to be explicit. An unrecognised value falls back to the
         default rather than guessing in either direction."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", "banana")
+        monkeypatch.setenv("HUBBUB_AUTO_START", "banana")
         assert client_mod._autostart_wanted() is True
 
-    def test_optout_file_beats_a_truthy_config(self, tmp_data_dir, monkeypatch):
-        """`/hubbub:talk auto-start off` is the later explicit act and must win
-        over the install-time answer, including after a `/plugin update`
-        restores the shipped manifest."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", "true")
+    def test_optout_file_beats_a_truthy_env(
+            self, tmp_data_dir, clean_autostart_env, monkeypatch):
+        """`/hubbub:talk auto-start off` is the explicit later act and must
+        win, including after `/plugin update` restores the shipped manifest."""
+        monkeypatch.setenv("HUBBUB_AUTO_START", "true")
         p = shared.autostart_optout_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.touch()
         assert client_mod._autostart_wanted() is False
 
-    def test_legacy_env_spelling_still_honoured(self, tmp_data_dir, monkeypatch):
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_AUTO_START", raising=False)
+    def test_legacy_env_spelling_still_honoured(
+            self, tmp_data_dir, clean_autostart_env, monkeypatch):
         monkeypatch.setenv("INTER_SESSION_AUTO_START", "false")
         assert client_mod._autostart_wanted() is False
+
+    def test_plugin_option_is_deliberately_ignored(
+            self, tmp_data_dir, clean_autostart_env, monkeypatch):
+        """Regression guard for the finding, not a preference.
+
+        Honouring this key would produce a setting that is inert in the only
+        place it matters: CC never sets it for a monitor, so the user's answer
+        would be invisible and every session would connect regardless. If
+        someone re-adds it, they must also change how the value is delivered
+        (fork #22) — this test is where that conversation starts.
+        """
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", "false")
+        assert client_mod._autostart_wanted() is True
 
 
 class TestFormatMsg:

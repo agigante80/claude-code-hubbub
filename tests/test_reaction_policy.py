@@ -131,20 +131,53 @@ class TestPrefixRenameStaging:
     def test_emitter_has_not_moved_yet(self):
         """Step 2 guard, and the reason this test looks backwards.
 
-        If someone flips `_format_msg` to `[hubbub …]` in the same release
-        that taught the policy, there is no version in which a 0.2.x monitor
-        and a newer policy can coexist — which is the entire point of
-        staging. When step 2 is genuinely being done, delete this test in
-        that commit and say so in the message.
-        """
-        assert '"[inter-session' in self.CODE or "[inter-session" in self.CODE
+        If someone flips the emitter in the same release that taught the
+        policy, there is no version in which a 0.2.x monitor and a newer
+        policy can coexist — which is the entire point of staging. When step 2
+        is genuinely being done, delete this test in that commit and say so in
+        the message.
 
-    def test_continuation_line_shares_the_prefix(self):
-        """The `cont` line carries the same prefix and has to move with the
-        main header, not a release later — otherwise a truncated message's two
-        halves disagree about who sent them."""
-        assert "cont]" in SKILL
-        assert "msg=" in SKILL
+        Anchored on `[hubbub msg=` rather than on the presence of the old
+        spelling. The first version of this test asserted `"[inter-session" in
+        CODE`, which cannot fail: 16 of the 19 literals in `client.py` are
+        `[inter-session]` operational notices, so they satisfied the check
+        even with every message header flipped.
+        """
+        assert "[hubbub msg=" not in self.CODE
+        assert "[inter-session msg=" in self.CODE
+
+    def test_emitter_never_mixes_the_two_spellings(self):
+        """The failure step 2 is actually likely to produce.
+
+        `client.py` has three message-header literals and sixteen
+        `[inter-session]` operational-notice literals. Flipping only the
+        headers looks done and passes a casual read, but strands every error
+        notice on the old spelling — and step 3 then drops that spelling from
+        the policy, so the agent silently stops recognising them. One spelling
+        or the other, never a mix.
+        """
+        old = self.CODE.count("[inter-session")
+        new = self.CODE.count("[hubbub")
+        assert (old > 0) != (new > 0), (
+            f"client.py mixes prefixes: {old} old, {new} new. Step 2 must "
+            f"move the message headers AND the operational notices in the "
+            f"same commit."
+        )
+
+    def test_continuation_line_moves_with_the_header(self):
+        """The `cont` line carries the same prefix, so a step-2 flip that
+        misses it leaves a truncated message's two halves disagreeing about
+        who sent them. Compares the two emitters rather than asserting a
+        substring appears somewhere in the prose, which the previous version
+        did and which no divergence could have failed."""
+        import re
+        header = re.search(r'\[(\S+) msg=\{msg_id\} from=', self.CODE)
+        cont = re.search(r'\[(\S+) msg=\{msg_id\} cont\]', self.CODE)
+        assert header and cont, "could not locate both emitters"
+        assert header.group(1) == cont.group(1), (
+            f"header emits {header.group(1)!r} but the continuation line "
+            f"emits {cont.group(1)!r}"
+        )
 
     def test_two_spellings_do_not_widen_the_header_boundary(self):
         """SEC-002 interaction called out in the ticket: accepting a second

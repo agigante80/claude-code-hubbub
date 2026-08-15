@@ -110,20 +110,33 @@ class TestMonitorsJson:
 
 
 class TestAutoStartUserConfig:
-    """fork #22: the auto-start choice is surfaced at install rather than only
-    reachable by knowing `/hubbub:talk auto-start off` exists."""
+    """fork #22. `auto_start` is deliberately **not** a userConfig option.
+
+    It was one for exactly one commit. CC injects `CLAUDE_PLUGIN_OPTION_*`
+    into *hooks* only — never into monitors — so the setting would have been
+    inert in the only place it matters: a user answering "no" would still get
+    a monitor in every session. Confirmed against the CC bundle (one
+    assignment site, inside the hook executor), against CC's own refusal to
+    let a monitor command reference `${user_config.*}`, and decisively against
+    two live monitors whose `/proc/<pid>/environ` held no `CLAUDE_PLUGIN_*`
+    at all.
+
+    See #28 — `port` and `idle_shutdown_minutes` have the same problem and
+    predate this.
+    """
 
     def _cfg(self):
         return json.loads(
             (REPO / ".claude-plugin" / "plugin.json").read_text()
         )["userConfig"]
 
-    def test_auto_start_is_declared_and_defaults_on(self):
-        entry = self._cfg()["auto_start"]
-        assert entry["type"] == "boolean"
-        # Default must stand alone: `--plugin-dir` local-dev mode never prompts
-        # for userConfig, so an absent value has to mean today's behaviour.
-        assert entry["default"] is True
+    def test_auto_start_is_not_offered_as_userconfig(self):
+        assert "auto_start" not in self._cfg(), (
+            "a userConfig auto_start cannot reach the monitor, so offering it "
+            "would ask the user a security-relevant question and then ignore "
+            "the answer. Re-adding it requires a delivery mechanism that "
+            "works — see fork #22."
+        )
 
     def test_when_stays_always_in_the_manifest(self):
         """The setting is enforced in client.py, not by templating `when`.
