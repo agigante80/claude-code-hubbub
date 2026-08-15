@@ -147,7 +147,7 @@ by hand.
 
 ### Suite status
 
-Green as of 2026-08-15: `414 passed in ~67 s` on Linux 7.0 / CPython
+Green as of 2026-08-15: `417 passed in ~65 s` on Linux 7.0 / CPython
 3.14. The four tests that used to fail all start **two listeners at
 once**, and they were reporting the real server-election race — fixed
 in `0e33123` by the election flock (see the election invariant below).
