@@ -274,6 +274,73 @@ class TestEnvAutoStartOff:
 
 
 
+class TestRootResolution:
+    """fork #16. Two ways this used to reach the wrong `monitors.json`."""
+
+    def test_bogus_explicit_root_fails_instead_of_falling_through(
+            self, tmp_path: Path):
+        """The one that actually bit: during the 0.2.0 review, `--off` with
+        CLAUDE_PLUGIN_ROOT pointing at a non-existent path fell through to the
+        script-relative candidate and rewrote **this repo's own**
+        monitors/monitors.json; the tree had to be restored with git checkout.
+
+        Note a plugin-marker check would not have prevented it — the repo is a
+        perfectly valid hubbub plugin root. The fix is that an explicit
+        override is authoritative: honour it or fail, never substitute a guess.
+        """
+        before = (REPO / "monitors" / "monitors.json").read_text()
+        r = _run(["--off"], plugin_root=tmp_path / "does-not-exist",
+                 data_dir=tmp_path / "data")
+        assert r.returncode == 2
+        assert "does not exist" in r.stderr
+        assert (REPO / "monitors" / "monitors.json").read_text() == before, (
+            "the repo's own manifest was modified by a run pointed elsewhere"
+        )
+
+    def test_inferred_root_must_carry_our_plugin_manifest(self, tmp_path: Path):
+        """A standalone-skill install lives at ~/.claude/skills/talk/bin/, and
+        four parents up from there is ~/.claude — so an unrelated
+        ~/.claude/monitors/monitors.json would be loaded and edited. Simulated
+        by planting a foreign manifest at the same relative position."""
+        root = tmp_path / "not-hubbub"
+        (root / "monitors").mkdir(parents=True)
+        (root / "monitors" / "monitors.json").write_text(json.dumps(
+            [{"name": "hubbub-client", "when": "always"}]
+        ))
+        skill_bin = root / "skills" / "talk" / "bin"
+        skill_bin.mkdir(parents=True)
+        shutil.copy(SCRIPT, skill_bin / "auto_start.py")
+        shutil.copytree(REPO / "skills" / "talk" / "bin",
+                        skill_bin, dirs_exist_ok=True)
+        before = (root / "monitors" / "monitors.json").read_text()
+        r = subprocess.run(
+            [sys.executable, str(skill_bin / "auto_start.py"), "--off"],
+            capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
+                 "HUBBUB_DATA_DIR": str(tmp_path / "data")},
+        )
+        assert r.returncode == 2, r.stdout
+        assert "not a hubbub plugin root" in r.stderr
+        assert (root / "monitors" / "monitors.json").read_text() == before
+
+    def test_standalone_install_says_so_instead_of_hunting(self, tmp_path: Path):
+        """No manifest anywhere: the answer is "there is nothing to
+        configure", not a search that might find someone else's file."""
+        skill_bin = tmp_path / "install" / "skills" / "talk" / "bin"
+        skill_bin.mkdir(parents=True)
+        shutil.copytree(REPO / "skills" / "talk" / "bin",
+                        skill_bin, dirs_exist_ok=True)
+        r = subprocess.run(
+            [sys.executable, str(skill_bin / "auto_start.py"), "--status"],
+            capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
+                 "HUBBUB_DATA_DIR": str(tmp_path / "data")},
+        )
+        assert r.returncode == 2
+        assert "standalone skill install" in r.stderr
+        assert "nothing to configure" in r.stderr
+
+
 class TestPartialFailure:
     """The two halves — the plugin manifest and the durable data-dir flag —
     must be independent. Ordering them only chooses which one silently gets
@@ -285,9 +352,13 @@ class TestPartialFailure:
         reads. `--on` doing so would re-enable the plugin's always-on monitor
         and then exit 2, reporting failure.
 
-        The copy is real, not a bogus CLAUDE_PLUGIN_ROOT: resolution falls back
-        to walking up from the script, so pointing the env var at nothing just
-        lands on this repo's own monitors.json.
+        The copy is real rather than a bogus CLAUDE_PLUGIN_ROOT. That used to
+        be a *workaround*: resolution fell back to walking up from the script,
+        so pointing the env var at nothing landed on this repo's own
+        monitors.json. Since fork #16 an explicit root is honoured or fatal,
+        so the workaround is no longer required — but the copy is kept because
+        it exercises the real standalone layout, which the env var never can.
+        `TestRootResolution` covers the bogus-env-var path directly.
         """
         standalone = tmp_path / "install" / "skills" / "talk"
         standalone.parent.mkdir(parents=True)
