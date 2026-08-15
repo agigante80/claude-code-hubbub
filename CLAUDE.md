@@ -74,7 +74,7 @@ Makefile bootstraps it on first use (uv preferred, stdlib `venv` as
 fallback). System Python is never touched.
 
 ```bash
-make test                                    # full suite (~75 s, 367 tests)
+make test                                    # full suite (~70 s, 369 tests)
 make test-fast                               # skip the 19 @pytest.mark.slow tests
 make clean                                   # remove .venv
 ```
@@ -88,7 +88,7 @@ To run pytest with non-make flags, use the venv's pytest directly:
 ```
 
 Two concurrent pytest sessions are **expected to pass** as of the #17 fix —
-verified by running two full suites at once (367 each, both green). Each
+verified by running two full suites at once (369 each, both green). Each
 session gets its own `tmp_data_dir`, so they do not contend for *state*; what
 broke them was contention for *CPU*, against subprocess tests that asserted on
 fixed `time.sleep()` durations.
@@ -109,11 +109,19 @@ Two caveats, so this doesn't read as a guarantee it isn't:
   None observed failing; tracked in #23.
 
 Also note the suite runs CPython 3.14 (uv-provisioned `.venv`) while the
-shipped monitors run the system interpreter — 3.12 on this machine. That
-difference is not cosmetic: `Path.resolve()` raises `RuntimeError` on a
+shipped monitors run whatever `python3` resolves to — 3.12 on this machine.
+That difference is not cosmetic: `Path.resolve()` raises `RuntimeError` on a
 symlink loop in 3.12 and silently returns the link in 3.14, which hid a real
-startup crash from `make test` until #19. For anything touching path
-resolution, run `HUBBUB_NO_REEXEC=1 /usr/bin/python3 -m pytest` as well.
+startup crash from `make test` until #19.
+
+So **a green `make test` is not by itself evidence that the shipped code is
+green**, for anything touching path resolution. There is deliberately no
+second command here yet: running the suite under the system interpreter needs
+pytest + websockets + psutil installed there, which contradicts "System Python
+is never touched" above and fails on a fresh clone. Giving it a supported
+form — a `make test-system` that provisions its own venv from `python3` rather
+than from uv — is #24. Until that exists, reason about version-sensitive
+behaviour explicitly rather than assuming the suite covers it.
 
 No build step, no linter configured. Runtime deps live at
 `skills/talk/requirements.txt` (websockets + psutil); dev
@@ -123,7 +131,7 @@ by hand.
 
 ### Suite status
 
-Green as of 2026-08-15: `367 passed in ~73 s` on Linux 7.0 / CPython
+Green as of 2026-08-15: `369 passed in ~66 s` on Linux 7.0 / CPython
 3.14. The four tests that used to fail all start **two listeners at
 once**, and they were reporting the real server-election race — fixed
 in `0e33123` by the election flock (see the election invariant below).
