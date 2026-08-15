@@ -193,6 +193,21 @@ and the reaction policy in `SKILL.md`, so changing it means teaching the
 policy to accept both spellings for a release before the emitter moves.
 Don't "finish the rename" in one sweep and assume it's cosmetic.
 
+**Step 1 of 3 is done.** The policy now accepts `[hubbub …]` *and*
+`[inter-session …]`; the emitter is unchanged and still writes
+`[inter-session …]`. The remaining steps are one per release:
+
+2. flip `client.py::_format_msg` and `_print_line` (and the `cont`
+   continuation line, which shares the prefix and must move in the same
+   commit), update `docs/security/SEC-001`/`SEC-002` prose;
+3. drop the legacy spelling from the policy.
+
+`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins this
+ordering, including a deliberately backwards test asserting the emitter
+has *not* moved. When you genuinely do step 2, delete that test in the
+same commit and say so in the message — it exists so the two halves
+cannot ship together by accident, since that failure is silent.
+
 #### The data-dir migration is a rename **plus a symlink**, and the symlink is the load-bearing half
 
 `shared.migrate_legacy_data_dir()` does `os.rename(inter-session, hubbub)`
