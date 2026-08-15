@@ -269,7 +269,7 @@ then re-run `/hubbub:talk connect`.
 
 ## install-deps — install runtime deps into an isolated venv
 
-Inter-session keeps its Python deps in a dedicated venv at
+hubbub keeps its Python deps in a dedicated venv at
 `~/.claude/data/hubbub/venv` so it never touches the user's
 system or user-level Python. Once the venv exists, every `bin/*.py`
 entry-point re-execs under that venv's interpreter automatically (a

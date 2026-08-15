@@ -7,7 +7,7 @@
     "port": {
       "type": "number",
       "title": "Server port",
-      "description": "Localhost WebSocket port for the inter-session bus.",
+      "description": "Localhost WebSocket port for the hubbub bus.",
       "default": 9473
     },
     "idle_shutdown_minutes": {

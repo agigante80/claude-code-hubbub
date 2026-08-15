@@ -78,7 +78,7 @@ def ensure_server_running(
     won the election.
     """
     import logging
-    log = logging.getLogger("inter-session.spawn")
+    log = logging.getLogger("hubbub.spawn")
     if is_server_up(host, port):
         log.info("ensure: already up")
         return True

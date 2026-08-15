@@ -62,7 +62,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from bin import shared, spawn, profile
 
-log = logging.getLogger("inter-session.client")
+log = logging.getLogger("hubbub.client")
 
 
 def _print_line(line: str) -> None:

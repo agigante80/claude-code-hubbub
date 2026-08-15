@@ -1,4 +1,4 @@
-"""WebSocket server for the inter-session bus."""
+"""WebSocket server for the hubbub bus."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ if str(_SKILL_DIR) not in sys.path:
 
 from bin import shared
 
-log = logging.getLogger("inter-session.server")
+log = logging.getLogger("hubbub.server")
 
 
 @dataclass
@@ -117,7 +117,7 @@ class Server:
             raise
 
         self._ready.set()
-        log.info("inter-session server listening on %s", self.port)
+        log.info("hubbub server listening on %s", self.port)
 
         idle_task = asyncio.create_task(self._idle_shutdown_loop())
         try:
