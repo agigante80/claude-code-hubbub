@@ -131,7 +131,7 @@ by hand.
 
 ### Suite status
 
-Green as of 2026-08-15: `389 passed in ~66 s` on Linux 7.0 / CPython
+Green as of 2026-08-15: `395 passed in ~67 s` on Linux 7.0 / CPython
 3.14. The four tests that used to fail all start **two listeners at
 once**, and they were reporting the real server-election race — fixed
 in `0e33123` by the election flock (see the election invariant below).
@@ -197,16 +197,27 @@ Don't "finish the rename" in one sweep and assume it's cosmetic.
 `[inter-session …]`; the emitter is unchanged and still writes
 `[inter-session …]`. The remaining steps are one per release:
 
-2. flip `client.py::_format_msg` and `_print_line` (and the `cont`
-   continuation line, which shares the prefix and must move in the same
-   commit), update `docs/security/SEC-001`/`SEC-002` prose;
+2. flip **every** prefix literal in `client.py` — that is 19 of them, not
+   3. Three are message headers in `_format_msg` (including the
+   `truncated=` variant) and the `cont` continuation line; the other
+   **sixteen are `[inter-session]` operational notices**. Note
+   `_print_line` is *not* one of them — it prints whatever it is handed
+   and contains no prefix. Then update the `docs/security/SEC-001` /
+   `SEC-002` prose;
 3. drop the legacy spelling from the policy.
 
-`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins this
-ordering, including a deliberately backwards test asserting the emitter
-has *not* moved. When you genuinely do step 2, delete that test in the
-same commit and say so in the message — it exists so the two halves
-cannot ship together by accident, since that failure is silent.
+Flipping only the message headers is the mistake to expect: it looks
+finished, and it strands every error notice on a spelling that step 3
+then deletes from the policy — after which the agent silently stops
+recognising them.
+
+`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins all of
+this. `test_emitter_never_mixes_the_two_spellings` catches the partial
+flip, and `test_emitter_has_not_moved_yet` is a deliberately backwards
+assertion that step 2 has not happened — **delete that one in the step-2
+commit and say so in the message.** Verified by doing both flips against
+the suite: a partial flip fails two tests, a complete flip fails only
+the delete-me one.
 
 #### The data-dir migration is a rename **plus a symlink**, and the symlink is the load-bearing half
 
@@ -361,15 +372,44 @@ commands.
 
 ### userConfig is delivered via env vars, NOT `${user_config.*}` substitution
 
-`monitors/monitors.json` deliberately omits `${user_config.*}` because
-that substitution breaks `--plugin-dir` local-dev mode (CC doesn't
-prompt + substitute in that mode). Instead, CC injects userConfig as
-`CLAUDE_PLUGIN_OPTION_*` env vars, and `bin/client.py`'s argparse
-defaults read those. **Do not add `--port` or
+`monitors/monitors.json` deliberately omits `${user_config.*}`. CC
+rejects it outright in a monitor command ("Monitor commands cannot
+safely reference `${user_config.*}`; have the monitor script read the
+value from a config file or prompt instead"), and it also breaks
+`--plugin-dir` local-dev mode. `bin/client.py`'s argparse defaults read
+`CLAUDE_PLUGIN_OPTION_*` instead. **Do not add `--port` or
 `--idle-shutdown-minutes` literal CLI args back into `monitors.json`
-or the SKILL.md `Monitor` command** — they silently nullify the
-user's plugin config. Regression test:
+or the SKILL.md `Monitor` command.** Regression test:
 `test_plugin_manifest.py::test_command_does_not_hardcode_userconfig_args`.
+
+#### …except CC never sets those env vars for a monitor
+
+**This section said userConfig "is delivered via env vars". That is true
+for hooks and false for monitors, and the difference matters.** Verified
+2026-08-15 three ways: the CC bundle (`2.1.233`) has exactly one site
+assigning ``CLAUDE_PLUGIN_OPTION_${…}`` and it sits inside the hook
+executor; CC's refusal message above tells plugin authors to use a
+config file precisely because the env route is unavailable; and two live
+monitors on this machine had 67 environment variables each with **no
+`CLAUDE_PLUGIN_*` at all**, not even `CLAUDE_PLUGIN_ROOT`.
+
+Consequences, none of them cosmetic:
+
+- **`port` and `idle_shutdown_minutes` userConfig have never reached the
+  auto-started monitor.** Someone who sets a non-default port in
+  `/plugin config` gets a monitor on 9473. Tracked as #28. The values
+  *do* work for a monitor the agent starts itself via `Monitor()`, since
+  that inherits the shell environment — which is why this went unnoticed.
+- **`auto_start` was added as userConfig and removed again in the same
+  night** (#22). An install prompt that silently ignores a
+  security-relevant answer is worse than no prompt.
+- `HUBBUB_*` / `INTER_SESSION_*` env vars *do* reach the monitor. They
+  are the working route, and the only one, until a config-file bridge
+  exists.
+
+Before adding any userConfig key, ask whether the thing that must read
+it is a hook or a monitor. If it is a monitor, the answer is not an env
+var.
 
 **`auto_start` is the case this rule did not anticipate, and it is worse
 than an inconvenience.** `port` and `idle_shutdown_minutes` work as env

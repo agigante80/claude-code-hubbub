@@ -4,12 +4,6 @@
   "description": "Agent-to-agent messaging for Claude Code sessions on the same machine.",
   "monitors": "./monitors/monitors.json",
   "userConfig": {
-    "auto_start": {
-      "type": "boolean",
-      "title": "Join the bus automatically",
-      "description": "Every Claude Code session on this machine connects at open, so peers can reach it without you invoking the skill there first. Turn this off to join only the sessions you choose. Changeable later with /hubbub:talk auto-start on|off.",
-      "default": true
-    },
     "port": {
       "type": "number",
       "title": "Server port",

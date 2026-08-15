@@ -202,43 +202,50 @@ class TestDurableOptOut:
         assert "wins" in r.stdout
 
 
-class TestUserConfigAutoStart:
-    """fork #22. The `auto_start` userConfig is a third source of truth that
-    this command cannot write, so its job is to never hide it."""
+class TestEnvAutoStartOff:
+    """fork #22, after the userConfig route was found inert. The env vars are
+    the only switch besides the opt-out file that actually reaches a monitor,
+    so they are the ones this command must not hide."""
 
-    OFF = {"CLAUDE_PLUGIN_OPTION_AUTO_START": "false"}
+    OFF = {"HUBBUB_AUTO_START": "false"}
 
-    def test_status_reports_the_plugin_config(
+    def test_status_names_the_variable(
             self, fake_plugin_root: Path, tmp_path: Path):
         r = _run(["--status"], fake_plugin_root, data_dir=tmp_path / "d",
                  extra_env=self.OFF)
-        assert "auto_start is set to false" in r.stdout
+        assert "HUBBUB_AUTO_START" in r.stdout
+        # The headline must not claim ON while a later line says otherwise;
+        # the headline is the part that gets summarized.
+        assert "ON  (" not in r.stdout
 
-    def test_on_is_not_claimed_when_the_config_forbids_it(
+    def test_on_refuses_before_touching_state(
             self, fake_plugin_root: Path, tmp_path: Path):
-        """The dead end this ticket had to either fix or expose: `--on` writes
-        the manifest and clears the opt-out, both successfully, and the monitor
-        still exits. Reporting success there would leave the user with no way
-        to connect the command to the behaviour."""
-        r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d",
-                 extra_env=self.OFF)
+        """The ordering matters more than the message. Detecting this after
+        `_set_optout(False)` would mean a command reporting "nothing applied"
+        had in fact deleted the user's durable opt-out."""
+        data = tmp_path / "d"
+        _run(["--off"], fake_plugin_root, data_dir=data)
+        assert (data / "autostart-off").exists()
+        r = _run(["--on"], fake_plugin_root, data_dir=data, extra_env=self.OFF)
         assert "NOT applied" in r.stdout
-        assert "/plugin" in r.stdout
+        assert r.returncode == 1
+        assert (data / "autostart-off").exists(), (
+            "the opt-out was destroyed by a command that said it did nothing"
+        )
 
-    def test_absent_config_is_not_read_as_off(
+    def test_absent_env_is_not_read_as_off(
             self, fake_plugin_root: Path, tmp_path: Path):
-        """`--plugin-dir` local-dev mode never prompts for userConfig, so the
-        var is simply absent there. Absent must mean "no opinion"; treating it
-        as off would disable auto-start for every local-dev session."""
         r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d")
         assert "NOT applied" not in r.stdout
-        assert "auto_start is set to false" not in r.stdout
 
-    def test_truthy_config_is_not_read_as_off(
+    def test_plugin_option_is_ignored(
             self, fake_plugin_root: Path, tmp_path: Path):
+        """CC never injects CLAUDE_PLUGIN_OPTION_* into a monitor, so acting
+        on it here would report a state the monitor does not share."""
         r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d",
-                 extra_env={"CLAUDE_PLUGIN_OPTION_AUTO_START": "true"})
+                 extra_env={"CLAUDE_PLUGIN_OPTION_AUTO_START": "false"})
         assert "NOT applied" not in r.stdout
+
 
 
 class TestPartialFailure:

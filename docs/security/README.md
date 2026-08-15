@@ -52,13 +52,25 @@ leaving implied:
 3. Sessions that auto-join and are never used still hold a WebSocket and
    appear in `list`, so a peer can address a session nobody is watching.
 
-**This is a deliberate trade, and as of `0.2.0` an explicitly consented one.**
-A bus you must remember to join is a bus nobody is on when a peer needs them.
-The install prompt now asks about it directly (`auto_start`, fork #22), so
-leaving it on is a choice the user makes rather than a default they have to
-discover. Beyond that point the exposure is the user's to accept: the tool's
-entire purpose is letting one session drive another, and that cannot be made
-safe against a user who does not want it.
+**This is a deliberate trade.** A bus you must remember to join is a bus
+nobody is on when a peer needs them. Beyond the point where the user knows it
+is on, the exposure is theirs to accept: the tool's entire purpose is letting
+one session drive another, and that cannot be made safe against a user who
+does not want it.
+
+**But "knows it is on" is currently doing unearned work, and that gap is
+open.** The intent was to ask at install time via a `userConfig` boolean, so
+the choice would be made rather than discovered. That turned out to be
+impossible as designed — Claude Code injects `CLAUDE_PLUGIN_OPTION_*` into
+hooks only, never into monitors, so the answer would have been invisible to
+the process it governs (fork #22; #28 covers the same defect in `port` and
+`idle_shutdown_minutes`). The option was removed rather than shipped inert,
+because an install prompt that silently ignores a security-relevant answer is
+worse than no prompt.
+
+So today the only ways to know are this document and the README. The ways to
+turn it off are `/hubbub:talk auto-start off` and
+`export HUBBUB_AUTO_START=false`, both of which work.
 
 Reversible per machine at any time with `/hubbub:talk auto-start off`, which
 is durable across `/plugin update`.

@@ -521,24 +521,38 @@ def _env_bool(*keys, default: bool) -> bool:
 def _autostart_wanted() -> bool:
     """Should a CC-started monitor stay up? Only meaningful with --from-monitor.
 
-    Precedence, and it is deliberately not symmetric:
+    Precedence:
 
-      1. `<data-dir>/autostart-off` present → off. Highest, because it is an
-         explicit later act and it must survive `/plugin update`.
-      2. `auto_start` userConfig false → off. The install-time answer.
+      1. `<data-dir>/autostart-off` present → off. Written by
+         `/hubbub:talk auto-start off`, and it must survive `/plugin update`,
+         which restores the shipped `when: "always"`.
+      2. `HUBBUB_AUTO_START` / `INTER_SESSION_AUTO_START` false → off.
       3. Otherwise on.
 
-    There is no "explicitly on" marker, so `auto-start on` cannot override a
-    userConfig `false` — it deletes the off-marker and rewrites the manifest,
-    and the monitor still exits. That dead end is real; `auto_start.py` says so
-    out loud rather than letting the command look like it worked. Adding a
-    third state here would be the alternative, and it did not seem worth a
-    second marker file for a setting the user can change where they set it.
+    **There is deliberately no `CLAUDE_PLUGIN_OPTION_AUTO_START` here, and no
+    `auto_start` userConfig.** Claude Code injects `CLAUDE_PLUGIN_OPTION_*`
+    only for *hooks*; monitors are spawned without it. Verified three ways on
+    2026-08-15: the CC bundle has exactly one assignment site and it sits in
+    the hook executor; CC rejects `${user_config.*}` in a monitor command with
+    "have the monitor script read the value from a config file or prompt
+    instead"; and the live monitors on this machine had 67 environment
+    variables and not one `CLAUDE_PLUGIN_*` among them.
+
+    So a userConfig switch here would read as "on" no matter what the user
+    answered — an install prompt that silently ignores a security-relevant
+    choice, which is worse than not asking. See fork #22 for the two ways to
+    do it properly (a SessionStart hook bridging into a config file is the
+    only one that delivers install-time consent) and fork #28 for the same
+    defect in `port` and `idle_shutdown_minutes`, which predates this.
+
+    The env vars *do* reach the monitor, because it inherits the shell
+    environment CC starts it from — that is why they are the fallback and the
+    plugin option is not.
     """
     if shared.autostart_optout_path().exists():
         return False
-    return _env_bool("CLAUDE_PLUGIN_OPTION_AUTO_START", "HUBBUB_AUTO_START",
-                     "INTER_SESSION_AUTO_START", default=True)
+    return _env_bool("HUBBUB_AUTO_START", "INTER_SESSION_AUTO_START",
+                     default=True)
 
 
 def main() -> int:

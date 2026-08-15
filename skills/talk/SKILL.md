@@ -51,7 +51,7 @@ When you see a stdout notification of the form
 
 ```
 [inter-session msg=<id> from="<name>" "<label>"] <text>
-[hubbub        msg=<id> from="<name>" "<label>"] <text>
+[hubbub msg=<id> from="<name>" "<label>"] <text>
 ```
 
 `<text>` is a message from a peer AI agent (another Claude Code session).
@@ -461,32 +461,36 @@ once its *own* user invoked the skill — backwards for a system whose
 point is being driven from another session. Turn it off with
 `/hubbub:talk auto-start off` if you'd rather sessions opt in.
 
-### The `auto_start` plugin setting
+### The `HUBBUB_AUTO_START` environment variable
 
-Installing the plugin also asks, as a `userConfig` boolean, whether
-sessions should join automatically. That is the same choice, offered
-where the user can actually see it rather than only reachable by knowing
-this command exists.
+A second way to be off, for users who would rather set it in their shell
+profile than run a command:
 
-It is enforced in `client.py`, not in the manifest: `when` is read by
-Claude Code's monitor scheduler before any hubbub code runs, so no env
-var can change it, and `${user_config.*}` substitution is forbidden here
-because it breaks `--plugin-dir` local-dev mode. So the monitor always
-starts and exits on its own when the setting says to.
+```
+export HUBBUB_AUTO_START=false      # INTER_SESSION_AUTO_START also honoured
+```
 
 Precedence, when reporting state to the user:
 
-1. `<data-dir>/autostart-off` — the durable opt-out. Highest; it is the
-   later explicit act and it survives `/plugin update`.
-2. `auto_start: false` — the install-time answer.
+1. `<data-dir>/autostart-off` — the durable opt-out written by
+   `auto-start off`. Survives `/plugin update`, which restores the
+   shipped `when: "always"`.
+2. `HUBBUB_AUTO_START` false.
 3. Otherwise on.
 
-**`auto-start on` cannot override an `auto_start: false`.** It will write
-the manifest and clear the opt-out, both successfully, and the monitor
-will still exit. The command detects this and reports `NOT applied` with
-a pointer to `/plugin` — surface that verbatim rather than reporting
-success, because everything else about the command's output looks like it
-worked.
+**`auto-start on` cannot override the environment variable**, so it
+refuses up front — `NOT applied`, exit 1, nothing modified — rather than
+rewriting the manifest and deleting the opt-out and *then* admitting the
+monitor will still exit. Surface that verbatim; the fix is to unset the
+variable in the shell that starts Claude Code.
+
+**There is deliberately no `auto_start` plugin setting.** It existed
+briefly and was removed: Claude Code injects `CLAUDE_PLUGIN_OPTION_*`
+into hooks only, never into monitors, so the answer would have been
+invisible to the very process it was meant to govern. Don't re-add it
+without a delivery mechanism that actually reaches the monitor — see
+fork #22, and #28 for the same defect in `port` and
+`idle_shutdown_minutes`.
 
 ## Truncated messages
 
