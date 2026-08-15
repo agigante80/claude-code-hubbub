@@ -13,8 +13,10 @@ bug rather than a scheduling one.
 
 from __future__ import annotations
 
+import os
 import selectors
 import time
+import weakref
 
 DEFAULT_TIMEOUT = 15.0
 
@@ -38,39 +40,67 @@ def wait_for(predicate, timeout: float = DEFAULT_TIMEOUT,
     return False
 
 
+# Leftover text per process, so a chunk containing several
+# lines is not lost. Weak keys: a finished Popen should still be
+# collectable.
+_BUFFERS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
 def read_line(proc, timeout: float = DEFAULT_TIMEOUT) -> str:
     """Read one non-empty line from `proc.stdout`, or return "" on timeout.
 
-    `proc.stdout.readline()` blocks until a line arrives or the pipe closes,
-    so a loop that checks its deadline only *between* reads cannot enforce
-    one — the read that never returns is precisely the one the timeout exists
-    for. The old helper advertised `timeout=5.0` and could not honour it, so a
-    message that never arrived hung the whole suite: no assertion message, no
-    traceback, the enclosing `finally` never running to reap the subprocesses,
-    just a job-level timeout. A hang is strictly worse than a failure.
+    Two bugs' worth of history, both about deadlines that were not real.
+
+    **Blocking read.** `proc.stdout.readline()` blocks until a line arrives or
+    the pipe closes, so a loop checking its deadline only *between* reads
+    cannot enforce one — the read that never returns is precisely the one the
+    timeout exists for. The old helper advertised `timeout=5.0` and could not
+    honour it, so a message that never arrived hung the whole suite: no
+    assertion message, no traceback, the enclosing `finally` never running to
+    reap the subprocesses. A hang is strictly worse than a failure.
+
+    **Buffered read behind a raw select.** The first fix selected on the fd and
+    then called `readline()` on the `TextIOWrapper`. `readline()` pulls up to
+    8 KB from the pipe in one syscall and keeps what it does not return, so
+    any further line already delivered sat invisible in Python's buffer while
+    `select` reported the *pipe* empty — and the call timed out on a line that
+    had already arrived. Two ways to hit it: a child flushing `"\\n[msg] x\\n"`
+    in one write (the blank-skip path re-selects and never sees `[msg] x`), or
+    simply two `read_line` calls when both lines came in one chunk. Latent
+    with today's callers, which read one line from a one-line-per-message
+    emitter, but `client.py` already has a two-line path for truncated
+    messages.
+
+    So this reads raw bytes and splits lines itself, keeping the remainder per
+    process. It therefore owns `proc.stdout`: do not mix it with
+    `readline()`/`read()`/`communicate()` on the same process.
 
     Blank lines are skipped rather than returned, matching what every caller
     wanted.
-
-    Residual limitation, stated rather than hidden: `select` reports the fd
-    readable, and we then call `readline()`, which can still block if the
-    child has written a partial line and stopped. That is a far narrower
-    window than "wrote nothing at all", which is the failure actually seen,
-    and closing it would mean reading raw bytes and reassembling lines here.
     """
+    fd = proc.stdout.fileno()
+    buf = _BUFFERS.get(proc, "")
     sel = selectors.DefaultSelector()
-    sel.register(proc.stdout, selectors.EVENT_READ)
+    sel.register(fd, selectors.EVENT_READ)
     try:
         end = time.monotonic() + timeout
         while True:
+            # Drain whole lines already buffered before waiting on the pipe:
+            # the bug above was doing this in the other order.
+            while "\n" in buf:
+                line, _, buf = buf.partition("\n")
+                if line.strip():
+                    _BUFFERS[proc] = buf
+                    return line.strip()
             remaining = end - time.monotonic()
             if remaining <= 0 or not sel.select(remaining):
+                _BUFFERS[proc] = buf
                 return ""
-            line = proc.stdout.readline()
-            if line == "":
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                _BUFFERS[proc] = buf
                 return ""  # EOF: the child closed its stdout
-            if line.strip():
-                return line.strip()
+            buf += chunk.decode("utf-8", errors="replace")
     finally:
-        sel.unregister(proc.stdout)
+        sel.unregister(fd)
         sel.close()

@@ -116,8 +116,9 @@ Two caveats, so this doesn't read as a guarantee it isn't:
   condition, `read_line` for a pipe read with a deadline it can actually
   enforce. Use them; the identical bug has been found three times in this
   suite (#17, #23, #27) and each time only the copy that failed got fixed.
-  One fixed `time.sleep` remains, as the poll interval inside
-  `_wait_for_state`, which is what a poll interval is for.
+  Across `test_helpers.py` and `test_client.py` the only remaining fixed
+  `time.sleep` calls are poll intervals inside wait loops, which is what a
+  poll interval is for — none precedes an assertion.
 
 Also note the suite runs CPython 3.14 (uv-provisioned `.venv`) while the
 shipped monitors run whatever `python3` resolves to — 3.12 on this machine.
@@ -146,7 +147,7 @@ by hand.
 
 ### Suite status
 
-Green as of 2026-08-15: `404 passed in ~65 s` on Linux 7.0 / CPython
+Green as of 2026-08-15: `414 passed in ~67 s` on Linux 7.0 / CPython
 3.14. The four tests that used to fail all start **two listeners at
 once**, and they were reporting the real server-election race — fixed
 in `0e33123` by the election flock (see the election invariant below).
