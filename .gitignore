@@ -37,3 +37,4 @@ Thumbs.db
 # being ignored.
 .claude/memory/
 .claude/handoffs/
+.claude/overnight/
