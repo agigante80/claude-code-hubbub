@@ -269,3 +269,26 @@ class TestDoctorIsDocumented:
         low = SKILL.lower()
         assert "will not repair anything" in low
         assert "must not offer" in low
+
+
+class TestSessionFingerprint:
+    """fork #7/#9. Rendering `sid=` is only half the fix — the policy has to
+    tell the agent what to do when it changes, or the field is decoration."""
+
+    def test_documented_in_the_notification_shape(self):
+        assert "sid=<8hex>" in SKILL
+
+    def test_says_a_changed_sid_means_a_different_conversation(self):
+        low = SKILL.lower()
+        assert "session fingerprint" in low
+        assert "different session with a different" in low
+
+    def test_says_it_is_not_an_authenticator(self):
+        """Same trap as the name: a peer picks its own session_id, so this
+        distinguishes sessions without proving anything about them."""
+        low = SKILL.lower()
+        assert "does not authenticate" in low
+
+    def test_absent_sid_is_not_read_as_sameness(self):
+        low = SKILL.lower()
+        assert "predates this field" in low

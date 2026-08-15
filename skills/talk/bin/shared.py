@@ -22,10 +22,15 @@ BROADCAST_TEXT_CAP = 256 * 1024
 # delivers to the receiving LLM. Empirically (issue #2), CC clips each
 # notification at ~512 chars total, so above this budget the truncated=
 # marker and cont-pointer line never reach the LLM. 400 leaves room for
-# our prefix (`[inter-session msg=… from="…" "…" truncated=N] `) under
-# the 512 limit in typical cases; very long name+label combos may still
-# clip, but the cont-pointer line is short and always fits, so the LLM
-# still gets the messages.log path for full content.
+# our prefix (`[inter-session msg=… from="…" sid=… "…" truncated=N] `)
+# under the 512 limit in typical cases; very long name+label combos may
+# still clip, but the cont-pointer line is short and always fits, so the
+# LLM still gets the messages.log path for full content.
+#
+# The `sid=` fingerprint (fork #7) costs ~13 characters of that margin.
+# Deliberately not compensated by lowering the cap: a truncated body has a
+# `cont` pointer to the full text in messages.log, whereas a misattributed
+# sender has no recovery at all.
 STDOUT_CAP = 400
 MAX_HOPS = 4
 PING_INTERVAL_S = 15
