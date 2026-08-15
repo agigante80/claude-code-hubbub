@@ -269,7 +269,12 @@ class Server:
         # stdout lines, the second beginning with what SKILL.md documents as an
         # authoritative prefix. Boundary reject here, neutralised again at
         # render by `short_session_id` — the same two layers SEC-001 uses.
-        if sid_raw is not None and not shared.validate_session_id(sid_raw):
+        # `sid_raw` truthiness, not `is not None`: an explicit empty string has
+        # always meant "mint me one" via the `sid_raw or uuid4()` fallback
+        # below, and an empty string cannot inject anything. Rejecting it was
+        # exactly the "lock out a peer for no safety gain" this guard set out
+        # to avoid.
+        if sid_raw and not shared.validate_session_id(sid_raw):
             await self._send_error(ws, shared.ErrorCode.INVALID_PAYLOAD,
                                    "invalid session_id")
             return None
@@ -529,7 +534,8 @@ class Server:
                 if len(sid_matches) > 1:
                     return None, (shared.ErrorCode.AMBIGUOUS,
                                   f"ambiguous session_id prefix {target!r}",
-                                  {"matches": [c.session_id[:8] for c in sid_matches]})
+                                  {"matches": [shared.short_session_id(c.session_id)
+                                               for c in sid_matches]})
             return None, (shared.ErrorCode.UNKNOWN_PEER,
                           f"no agent matches {target!r}", {})
 

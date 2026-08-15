@@ -82,7 +82,14 @@ def _format_msg(msg: dict) -> str:
     # SEC-001 uses for labels, because this must also hold for ids recorded by
     # an older server or replayed from messages.log.
     from_sid = shared.short_session_id(msg.get("from", ""))
-    from_name = msg.get("from_name") or from_sid or "?"
+    # A nameless peer shows `from="?"` rather than borrowing its own
+    # fingerprint as a name. Reusing it there meant `sid=` was then suppressed
+    # as a duplicate — so a *current-build* nameless peer emitted no `sid=` at
+    # all, which the policy explicitly tells the agent means "older build".
+    # It also let a peer that names itself `7a2016e4` and picks a matching
+    # session_id produce a header byte-identical to that nameless session,
+    # which is the ambiguity `sid=` exists to remove.
+    from_name = msg.get("from_name") or "?"
     from_label = shared.sanitize_label_for_display(msg.get("from_label", ""))
     msg_id = msg.get("msg_id", "")
     label_part = f' "{from_label}"' if from_label else ""
@@ -101,10 +108,7 @@ def _format_msg(msg: dict) -> str:
     # Costs ~13 characters of the STDOUT_CAP budget (see shared.STDOUT_CAP on
     # why that budget is tight). Judged worth it: a truncated body has a
     # `cont` pointer to the full text, a misattributed sender has nothing.
-    # Suppressed when the name fell back to the fingerprint, which would
-    # otherwise render `from="7a2016e4" sid=7a2016e4` — 13 wasted characters of
-    # a tight budget saying the same thing twice.
-    sid_part = f" sid={from_sid}" if from_sid and from_sid != from_name else ""
+    sid_part = f" sid={from_sid}" if from_sid else ""
     if was_truncated:
         prefix = (f'[inter-session msg={msg_id} from="{from_name}"{sid_part}'
                   f'{label_part} truncated={full_len}]')
