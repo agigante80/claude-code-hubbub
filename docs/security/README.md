@@ -20,8 +20,8 @@ yes. SEC-001 is closed at two layers: `validate_label` rejects
 the redundancy covering labels that never passed live validation.
 SEC-002 is closed by the reaction policy stating that only the *leading*
 header is authoritative. Regression tests:
-`test_client.py::test_label_cannot_forge_header` and
-`test_reaction_policy.py::test_only_leading_header_is_authoritative`.
+`tests/test_client.py::TestFormatMsg::test_label_cannot_forge_header` and
+`tests/test_reaction_policy.py::TestReactionPolicy::test_only_leading_header_is_authoritative`.
 
 Both are still open **upstream** (PRs #8 and #9 on
 `yilunzhang/claude-code-inter-session`, unreviewed since 2026-07-12), which
@@ -70,10 +70,8 @@ worse than no prompt.
 
 So today the only ways to know are this document and the README. The ways to
 turn it off are `/hubbub:talk auto-start off` and
-`export HUBBUB_AUTO_START=false`, both of which work.
-
-Reversible per machine at any time with `/hubbub:talk auto-start off`, which
-is durable across `/plugin update`.
+`export HUBBUB_AUTO_START=false`, both of which work. The former is durable
+across `/plugin update`.
 
 **One genuinely new surface**, noted for completeness: the opt-out is a
 presence check on `<data-dir>/autostart-off`, so any same-UID process can
@@ -92,7 +90,9 @@ nobody messaged.
 - **`verify_server_identity`** — fails closed on missing/dead/mismatched pidfile
   and on cmdline lacking `bin/server.py`.
 - **`cwd`** — peer-controlled but sanitized server-side before storage
-  (`server.py:318`); not vulnerable (contrast SEC-001, where `label` is not).
+  (`server.py:318`); not vulnerable. At the time of the review this contrasted
+  with `label`, which was not sanitized — that is SEC-001, now fixed, so the
+  two are consistent today.
 - **Subprocess / deserialization** — all `json.loads`; `spawn.py`/`discover.py` use
   list-form args, no shell.
 - **Size caps** — `TEXT_CAP` 10 MB, broadcast 256 KB, frame 16 MB, codepoint-safe

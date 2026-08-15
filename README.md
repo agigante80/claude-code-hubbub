@@ -405,6 +405,17 @@ The WebSocket port and idle-shutdown timeout are configurable via
 | `port`                    | number | `9473`  | Localhost WebSocket port for the bus.                     |
 | `idle_shutdown_minutes`   | number | `10`    | Server exits after this many minutes with no connected clients. `0` = never. |
 
+> **Known bug — these do not currently reach the auto-started monitor.**
+> Claude Code passes plugin config to *hooks* as `CLAUDE_PLUGIN_OPTION_*`
+> env vars, but not to *monitors*, so a monitor started at session open
+> uses the defaults whatever you set here. The failure is quiet: a
+> monitor on `9473` when you asked for `9500` simply elects its own
+> server and forms a second, isolated bus that looks like it is working.
+> Until this is fixed, set `HUBBUB_PORT` / `HUBBUB_IDLE_MINUTES` in the
+> shell that starts Claude Code — the monitor inherits that environment,
+> so it does take effect. Tracked in
+> [#28](https://github.com/agigante80/claude-code-hubbub/issues/28).
+
 ## Security
 
 - Server binds `127.0.0.1` only.

@@ -131,7 +131,7 @@ by hand.
 
 ### Suite status
 
-Green as of 2026-08-15: `395 passed in ~67 s` on Linux 7.0 / CPython
+Green as of 2026-08-15: `397 passed in ~67 s` on Linux 7.0 / CPython
 3.14. The four tests that used to fail all start **two listeners at
 once**, and they were reporting the real server-election race — fixed
 in `0e33123` by the election flock (see the election invariant below).
@@ -411,18 +411,20 @@ Before adding any userConfig key, ask whether the thing that must read
 it is a hook or a monitor. If it is a monitor, the answer is not an env
 var.
 
-**`auto_start` is the case this rule did not anticipate, and it is worse
-than an inconvenience.** `port` and `idle_shutdown_minutes` work as env
-vars because *our* argparse reads them. `when` is read by CC's monitor
-scheduler *before any hubbub code runs*, so no env var can reach it —
-and the substitution that could is the one that breaks local-dev mode.
-So the manifest stays `when: "always"` unconditionally and the setting
-is enforced in `client.py::_autostart_wanted`: the monitor starts and
+**`when` has a second, separate problem** worth keeping straight from
+the delivery one above: it is read by CC's monitor scheduler *before any
+hubbub code runs*, so even a working env var could not change it. The
+manifest therefore stays `when: "always"` unconditionally and auto-start
+is enforced in `client.py::_autostart_wanted` — the monitor starts and
 then exits on its own. Don't "fix" the apparent inconsistency by
-templating `when`, and don't read the always-on manifest as meaning the
-user never got a choice. Precedence is opt-out file → userConfig →
-default on; `auto-start on` therefore cannot override a userConfig
-`false`, which `auto_start.py` reports rather than hides (fork #22).
+templating `when`.
+
+Effective precedence is **`<data-dir>/autostart-off` → `HUBBUB_AUTO_START`
+/ `INTER_SESSION_AUTO_START` → default on**, resolved first-parseable-wins
+so a truthy new spelling shadows a falsey legacy one. `auto_start.py`
+must mirror that exactly, key list *and* resolution rule; when it drifted
+to "first falsey key wins" it reported `OFF` for monitors that were
+happily running and refused to clear the opt-out.
 
 ### Roles: agent vs control
 
