@@ -129,7 +129,8 @@ def _acquire_migration_lock(timeout_s: float = 5.0) -> int | None:
         _migration_error(
             f"could not open {path}: {e}; not migrating. Live state may stay "
             f"under the legacy path while this build uses the new one — run "
-            f"/hubbub:talk doctor to check."
+            f"/hubbub:talk doctor to check.",
+            hint=False,
         )
         return None
     deadline = time.monotonic() + timeout_s
@@ -289,7 +290,8 @@ def migrate_legacy_data_dir() -> None:
             return
         _migration_error(
             f"could not migrate {legacy} → {new}: {e}. Run /hubbub:talk "
-            f"doctor to see which path holds the live token."
+            f"doctor to see which path holds the live token.",
+            hint=False,
         )
     finally:
         os.close(lock_fd)
@@ -342,7 +344,8 @@ def _drain_into(src: Path, dst: Path) -> bool:
             f"cannot merge {src} into {dst}: both hold {sorted(live)}. Old and "
             f"new builds will use separate tokens until this is resolved by "
             f"hand. Run /hubbub:talk doctor for both sides' tokens and live "
-            f"listeners."
+            f"listeners.",
+            hint=False,
         )
         return False
     # Live state first, and all-or-nothing. Bailing out *after* moving some of
@@ -476,7 +479,8 @@ def _link_legacy(legacy: Path, new: Path) -> None:
                 f"{new}; an older build has recreated it with its own token. "
                 f"Old and new builds will use separate tokens until one of "
                 f"them is removed by hand. Run /hubbub:talk doctor to see "
-                f"which side has the listeners you want to keep."
+                f"which side has the listeners you want to keep.",
+                hint=False,
             )
 
 
@@ -560,7 +564,7 @@ def _migration_warn(msg: str) -> None:
         pass
 
 
-def _migration_error(msg: str) -> None:
+def _migration_error(msg: str, hint: bool = True) -> None:
     """A failure that leaves the install un-migrated or forked.
 
     These are the ones that say "must be resolved by hand", and stderr is where
@@ -575,11 +579,15 @@ def _migration_error(msg: str) -> None:
     """
     # Appended here rather than at each call site. There are eight of them and
     # patching them individually is the exact shape #18 records this file
-    # failing at repeatedly — fix two, miss the third. A call site that has
-    # something more specific to say already names doctor and keeps its own
-    # wording.
-    if "doctor" not in msg:
-        msg = f"{msg} Run /hubbub:talk doctor to see the current state."
+    # failing at repeatedly — fix two, miss the third.
+    #
+    # `hint=False` rather than sniffing for "doctor" in the text: these
+    # messages interpolate {legacy}, {new}, {path} and exception strings, so a
+    # user whose home directory contains "doctor" would silently lose the
+    # pointer this exists to add — and no test could see it happen.
+    if hint:
+        sep = "" if msg.rstrip().endswith((".", "!", "?")) else "."
+        msg = f"{msg.rstrip()}{sep} Run /hubbub:talk doctor to see the current state."
     line = f"[inter-session] data-dir migration: {msg}"
     # stderr unconditionally, so the record exists even when the escalation
     # below is dropped (an opted-out session must stay silent on stdout).
