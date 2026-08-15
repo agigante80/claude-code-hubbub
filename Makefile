@@ -19,6 +19,14 @@ SYS_DEPS_STAMP := $(SYS_VENV)/.deps-stamp
 .PHONY: test test-fast test-system test-both versions clean help
 .DEFAULT_GOAL := help
 
+# `make -j2 test-both` would otherwise run two pytest sessions at once. That
+# is survivable for the suite proper since fork #17, but NOT for the canary
+# tests in test_auto_start.py: they capture and restore the *real*
+# monitors/monitors.json, so two sessions can interleave capture and restore
+# and leave the tracked file mutated. The help text promises "sequentially";
+# this is what makes that true rather than aspirational.
+.NOTPARALLEL:
+
 help:
 	@echo "Targets (all run inside a project-local venv; system Python is never modified):"
 	@echo "  make test         Run the full pytest suite in $(VENV)."
