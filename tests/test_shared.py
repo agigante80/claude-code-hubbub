@@ -1833,3 +1833,14 @@ class TestShortSessionIdIsAPrefix:
     def test_non_string_is_tolerated(self):
         assert shared.short_session_id(None) == ""
         assert shared.short_session_id(12345) == ""
+
+
+class TestValidateSessionIdTypeGuard:
+    """The non-str arm. `session_id` arrives from JSON, so a peer can send a
+    number, a list or null — and `SESSION_ID_RE.match(3)` raises TypeError
+    rather than returning False, which would surface as a 500-shaped crash in
+    the hello handler instead of a clean rejection."""
+
+    @pytest.mark.parametrize("bad", [None, 3, ["a"], {"a": 1}, b"bytes"])
+    def test_non_string_is_rejected_not_raised(self, bad):
+        assert shared.validate_session_id(bad) is False

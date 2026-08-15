@@ -75,6 +75,7 @@ fallback). System Python is never touched.
 
 ```bash
 make test                                    # full suite (~70 s), .venv
+make coverage                                # suite under coverage; gate at 80%
 make test-fast                               # skip the 19 @pytest.mark.slow tests
 make test-system                             # same suite under the SYSTEM python3
 make test-both                               # both interpreters, sequentially
@@ -155,6 +156,27 @@ If any of them regresses, suspect the election, not the assertions.
 
 One `PytestUnraisableExceptionWarning` from CPython 3.14's asyncio
 `_SelectorTransport.__del__` is expected noise, not a product bug.
+
+### Coverage, and the trap in measuring it
+
+`make coverage` reports **82%** (line + branch) and fails below the 80% floor
+in `.coveragerc`. Thinnest: `discover.py` 61% and `relabel.py` 65% — both are
+mostly error branches needing a real process tree or a live listener, and
+`discover.py` is the process-tree walk this file already flags as trap-laden,
+so that is the least comfortable number in the set.
+
+**Do not measure it by hand with a bare `coverage run`.** Most of the
+integration value here is subprocess tests, and their children are separate
+processes, so without `parallel = True` plus the startup hook `make coverage`
+installs into `.venv`, `auto_start.py` and `doctor.py` report **0%** — they are
+reached *only* through subprocesses — and the total reads 68% instead of 82%.
+That looks like two untested modules when they are 90% and 78%.
+
+The subprocess helpers deliberately build a *clean* env dict, which is why
+they are trustworthy and also why the hook does not reach the child. Every
+such call site therefore splices in `tests/waiting.coverage_env()`, which is
+empty outside a coverage run. **Add it to any new subprocess call site**, or
+that code will silently read as uncovered.
 
 ## Architecture (big picture)
 
