@@ -369,6 +369,7 @@ collaboration.
 | `/hubbub:talk status`                          | Heuristic connection state.                                    |
 | `/hubbub:talk disconnect`                      | Stop the monitor.                                              |
 | `/hubbub:talk auto-start [on\|off\|status]`    | Toggle auto-start. `on` = start at every session (default); `off` = no auto-start (`/hubbub:talk connect` still works). Apply with `/reload-plugins`. |
+| `/hubbub:talk doctor`                          | Report the data directory's health: which path is live, what the legacy path actually is, who holds the port, which listeners are alive. Read-only. |
 
 ## Session labels
 
@@ -456,7 +457,17 @@ that the receiving agent read or acted on the message:
 - `list` shows how long a peer has been connected, not whether it is
   paying attention.
 - A `name` belongs to whoever holds it *now*; `session_id` is the stable
-  handle across restarts.
+  handle across restarts. That distinction is not academic: on one machine
+  `alienware` has been held by 7 different sessions and `arivit` by 6, so
+  "reply to arivit" has meant six different conversations over time.
+- Because of that, every notification carries **`sid=`** — a prefix of the
+  sender's `session_id`, matching the ID column in `list`, and usable with
+  `send --to <short id>`. **If you resume an exchange and the `sid` has
+  changed, you are talking to a different session that remembers nothing of
+  the earlier one.** A missing `sid=` means the peer is on a build from
+  before the field existed, not that it is the same session. Like the name,
+  it is chosen by the peer: it distinguishes sessions, it does not
+  authenticate them.
 
 If your machine also runs Claude Code's own peer messaging
 (`ListAgents` / `SendMessage`), note that it is a **separate namespace
