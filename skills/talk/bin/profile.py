@@ -34,10 +34,15 @@ def project_root(cwd: Optional[str] = None) -> str:
     else the starting directory. Symlink-resolved so equivalent paths collapse
     to one profile."""
     start = Path(cwd) if cwd else Path.cwd()
-    try:
-        start = start.resolve()
-    except OSError:
-        start = start.absolute()
+    # `except OSError` missed the CPython 3.12 symlink-loop RuntimeError, the
+    # same gap that took down all five entry-points at startup until fork #19.
+    # Unreachable while every caller passes cwd=None (a process cannot have a
+    # loop as its cwd), but the signature accepts a path and this runs during
+    # client startup to load the persisted label — one call site away from a
+    # traceback. Third instance of this shape in the codebase; #18 records
+    # that fixing them two at a time keeps missing the third (fork #26).
+    resolved = shared.resolve_safe(start)
+    start = resolved if resolved is not None else start.absolute()
     for d in (start, *start.parents):
         if (d / ".git").exists():
             return str(d)

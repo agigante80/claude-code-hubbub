@@ -163,3 +163,33 @@ class TestResolveLabel:
         profile.save_label("old", str(tmp_path))
         assert profile.resolve_label("new", str(tmp_path)) == "new"
         assert profile.load_label(str(tmp_path)) == "new"
+
+
+class TestProjectRootResolveIsTotal:
+    """fork #26. `project_root` guarded `resolve()` with a bare `except
+    OSError`, which does not cover the CPython 3.12 symlink-loop RuntimeError
+    — the third instance of that shape in the codebase after #19 fixed four
+    sites in shared.py and called it a class fix."""
+
+    def test_symlink_loop_cwd_does_not_raise(self, tmp_path, tmp_data_dir):
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+        # Must not raise on either interpreter: 3.12 raises RuntimeError here,
+        # 3.14 returns the link. Falling back to absolute() is fine — an
+        # unresolvable path still makes a stable profile key.
+        root = profile.project_root(str(loop))
+        assert isinstance(root, str) and root
+
+    def test_dangling_cwd_does_not_raise(self, tmp_path, tmp_data_dir):
+        dangling = tmp_path / "dangling"
+        dangling.symlink_to(tmp_path / "gone")
+        assert profile.project_root(str(dangling))
+
+    def test_normal_path_still_resolves(self, tmp_path, tmp_data_dir):
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        # The docstring promises symlink-resolved keys so equivalent paths
+        # collapse to one profile; that must survive the new guard.
+        assert profile.project_root(str(link)) == profile.project_root(str(real))

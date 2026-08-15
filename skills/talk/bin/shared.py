@@ -140,7 +140,7 @@ def _acquire_migration_lock(timeout_s: float = 5.0) -> int | None:
             time.sleep(0.02)
 
 
-def _resolve_safe(p: Path) -> Path | None:
+def resolve_safe(p: Path) -> Path | None:
     """`Path.resolve()` that cannot raise. `None` means "could not resolve".
 
     Non-strict `resolve()` is not total. On a **symlink loop** CPython 3.12
@@ -168,7 +168,7 @@ def _same_target(a: Path, b: Path) -> bool:
     """Do both paths resolve to the same place? Unresolvable is never "same" —
     answering True there would let a broken link masquerade as a completed
     migration."""
-    ra, rb = _resolve_safe(a), _resolve_safe(b)
+    ra, rb = resolve_safe(a), resolve_safe(b)
     return ra is not None and rb is not None and ra == rb
 
 
@@ -225,7 +225,7 @@ def migrate_legacy_data_dir() -> None:
                 # this install if the symlink is later lost.
                 _mark_migrated(new)
             else:
-                target = _resolve_safe(legacy)
+                target = resolve_safe(legacy)
                 where = target if target is not None else "an unresolvable path"
                 _migration_error(f"{legacy} is a symlink to {where}, "
                                 f"not {new}; leaving it alone")
@@ -432,7 +432,7 @@ def _finish_drain(src: Path, dst: Path) -> None:
 
 def _legacy_points_at(legacy: Path, new: Path) -> bool:
     # `_same_target` absorbs both the OSError and the 3.12 symlink-loop
-    # RuntimeError this used to leak; see `_resolve_safe`.
+    # RuntimeError this used to leak; see `resolve_safe`.
     return legacy.is_symlink() and _same_target(legacy, new)
 
 
@@ -624,7 +624,7 @@ def _still_on_legacy(legacy: Path, new: Path) -> bool:
         # Unresolvable here means "reachable directory we cannot resolve",
         # since is_dir() already succeeded — so `not _same_target` says the
         # live state is still on legacy, the answer that does not fork the
-        # namespace. `_resolve_safe` also absorbs the 3.12 loop RuntimeError,
+        # namespace. `resolve_safe` also absorbs the 3.12 loop RuntimeError,
         # belt-and-braces in case the is_dir() guard ever moves.
         return not _same_target(legacy, new)
     return legacy.is_dir()
