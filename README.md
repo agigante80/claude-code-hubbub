@@ -403,6 +403,7 @@ The WebSocket port and idle-shutdown timeout are configurable via
 
 | Key                       | Type   | Default | What it does                                              |
 | :------------------------ | :----- | :------ | :-------------------------------------------------------- |
+| `auto_start`              | boolean| `true`  | Join the bus in every session automatically. Off means only the sessions you connect by hand. Note `/hubbub:talk auto-start on` cannot override a `false` here — change it in this config. |
 | `port`                    | number | `9473`  | Localhost WebSocket port for the bus.                     |
 | `idle_shutdown_minutes`   | number | `10`    | Server exits after this many minutes with no connected clients. `0` = never. |
 
@@ -418,8 +419,13 @@ The WebSocket port and idle-shutdown timeout are configurable via
 - **Auto-start is on by default, so every Claude Code session joins the
   bus at open** — including sessions in repos where you never invoke the
   skill. Anything holding the token can therefore reach all of them, not
-  just the ones you opted in. `/hubbub:talk auto-start off` reverts to
-  opt-in per machine.
+  just the ones you opted in. Installing the plugin asks you about this
+  (`auto_start`), and `/hubbub:talk auto-start off` reverts to opt-in per
+  machine at any time. The threat model was written for the opt-in world
+  and is restated for always-on in
+  [docs/security/](./docs/security/README.md) — worth reading once before
+  leaving it on, because the reaction policy acts on peer messages as if
+  you had typed them, in every session on the machine.
 - The receiving agent's reaction policy (see
   [SKILL.md](./skills/talk/SKILL.md)) treats peer messages as
   instructions but applies the same caution as user input —
