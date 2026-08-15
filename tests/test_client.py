@@ -23,6 +23,26 @@ REPO = Path(__file__).resolve().parent.parent
 BIN_DIR = REPO / "skills" / "talk" / "bin"
 
 
+def _wait_for(predicate, timeout: float = 15.0, interval: float = 0.05) -> bool:
+    """Poll `predicate` until it is true or `timeout` elapses.
+
+    Subprocess tests must not assert on a fixed `time.sleep()`: the sleep that
+    is comfortably long on an idle machine is too short under a full-suite run
+    or a concurrent pytest session, and the resulting failure reads like a
+    product bug rather than a scheduling one (fork #17). Waiting on the
+    condition costs nothing when it is already true.
+    """
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            if predicate():
+                return True
+        except OSError:
+            pass
+        time.sleep(interval)
+    return False
+
+
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
     """Deliberately shadows conftest's fixture using the *legacy* env spelling,
@@ -306,7 +326,9 @@ class TestNameCollisionAutoRetry:
                     p.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     p.kill()
-            pid_path = tmp_data_dir / "server.pid"
+            # Endpoint-scoped name: `server.pid` never matched, so this
+            # cleanup silently leaked the elected server (fork #17).
+            pid_path = tmp_data_dir / f"server.{free_port}.pid"
             if pid_path.exists():
                 try:
                     os.kill(int(pid_path.read_text().strip()), 9)
@@ -349,7 +371,9 @@ class TestNameCollisionAutoRetry:
                     p.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     p.kill()
-            pid_path = tmp_data_dir / "server.pid"
+            # Endpoint-scoped name: `server.pid` never matched, so this
+            # cleanup silently leaked the elected server (fork #17).
+            pid_path = tmp_data_dir / f"server.{free_port}.pid"
             if pid_path.exists():
                 try:
                     os.kill(int(pid_path.read_text().strip()), 9)
@@ -376,7 +400,26 @@ class TestReElectionAfterServerCrash:
             env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        time.sleep(0.5)
+        pid_path = tmp_data_dir / f"server.{free_port}.pid"
+        # Wait on the condition, not on a fixed sleep: under a loaded machine
+        # (or a concurrent pytest session) 0.5 s was not always enough for the
+        # server to reach listen(). When it wasn't, the client below won its
+        # own election and spawned a *second* server, and the assertions after
+        # the kill then described a race that had nothing to do with
+        # SO_REUSEADDR. See fork #17.
+        assert spawn.wait_for_server("127.0.0.1", free_port, timeout=15), (
+            "the manually started server never began listening"
+        )
+        assert _wait_for(
+            lambda: pid_path.exists()
+            and pid_path.read_text().strip() == str(srv_proc.pid),
+            timeout=15,
+        ), (
+            "pidfile does not name the server this test started "
+            f"(wanted {srv_proc.pid}, found "
+            f"{pid_path.read_text().strip() if pid_path.exists() else 'no pidfile'}) "
+            "— something else won the election"
+        )
         # Spawn one client.
         env_c = env.copy()
         env_c["INTER_SESSION_PPID_OVERRIDE"] = "30001"
@@ -387,14 +430,24 @@ class TestReElectionAfterServerCrash:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         try:
-            time.sleep(1.0)
+            # Again a condition rather than a sleep: the client must have
+            # registered before the kill, or it has no connection to notice
+            # dropping and never re-elects.
+            session_file = tmp_data_dir / "clients" / "30001.session"
+            assert _wait_for(session_file.exists, timeout=15), (
+                "client never registered — no state file, so it was not "
+                "connected when the server was killed"
+            )
             old_pid = srv_proc.pid
             srv_proc.kill()
             srv_proc.wait()
-            # Wait for re-election (typically <2s with new SO_REUSEADDR).
+            # Wait for re-election. Typically <2 s, but the client backs off
+            # exponentially before retrying, so on a loaded machine the first
+            # retry alone can eat most of a short budget. 6 s was the original
+            # figure and it is what made this test the suite's flakiest under
+            # concurrency; the generous budget costs nothing on a pass.
             new_pid = None
-            end = time.time() + 6
-            pid_path = tmp_data_dir / f"server.{free_port}.pid"
+            end = time.time() + 30
             while time.time() < end:
                 if pid_path.exists():
                     try:
@@ -420,8 +473,11 @@ class TestReElectionAfterServerCrash:
                 client.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 client.kill()
-            # Cleanup any new server
-            pid_path = tmp_data_dir / "server.pid"
+            # Cleanup any new server. This looked for `server.pid`, but the
+            # pidfile is endpoint-scoped (`server.<port>.pid`), so it never
+            # matched and every run of this test leaked the re-elected server
+            # until its idle-shutdown fired a minute later. Leaked servers are
+            # exactly the background load that made this test flaky (fork #17).
             if pid_path.exists():
                 try:
                     os.kill(int(pid_path.read_text().strip()), 9)

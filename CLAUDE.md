@@ -87,8 +87,17 @@ To run pytest with non-make flags, use the venv's pytest directly:
 .venv/bin/pytest -k "election" -v                             # by substring
 ```
 
-Never run two pytest sessions concurrently — the subprocess-spawning
-tests bind real ports and race each other into spurious failures.
+Two concurrent pytest sessions are **expected to pass** as of the #17 fix —
+verified by running two full suites at once (367 each, both green). Each
+session gets its own `tmp_data_dir` and its own ephemeral port, so they never
+contended for *state*; what broke them was contention for *CPU*, against
+subprocess tests that asserted on fixed `time.sleep()` durations.
+
+The rule is therefore no longer "don't run two", it is **don't assert on a
+sleep**. `tests/test_client.py::_wait_for` polls a condition instead; use it
+for anything that waits on a subprocess. `tests/test_helpers.py` still has ten
+fixed sleeps of the old shape — none observed failing, tracked in #23 — so a
+spurious failure *there* under concurrency is a known gap, not a new bug.
 
 No build step, no linter configured. Runtime deps live at
 `skills/talk/requirements.txt` (websockets + psutil); dev
