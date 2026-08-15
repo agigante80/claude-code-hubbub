@@ -74,14 +74,33 @@ def _print_line(line: str) -> None:
 def _format_msg(msg: dict) -> str:
     sanitized = shared.sanitize_for_stdout(msg.get("text", ""))
     truncated, was_truncated, full_len = shared.truncate_for_stdout(sanitized)
-    from_name = msg.get("from_name") or msg.get("from", "?")[:8]
+    from_sid = str(msg.get("from", ""))[:8]
+    from_name = msg.get("from_name") or from_sid or "?"
     from_label = shared.sanitize_label_for_display(msg.get("from_label", ""))
     msg_id = msg.get("msg_id", "")
     label_part = f' "{from_label}"' if from_label else ""
+    # `sid=` is the session fingerprint (fork #7, evidenced by #9). A name is
+    # self-asserted and reused: on this machine `alienware` has been held by 7
+    # distinct session_ids and `arivit` by 6, so "send to arivit" has meant six
+    # different conversations. Without this the receiver cannot tell that the
+    # peer it answered yesterday is a different session today, and there is no
+    # signal anywhere that anything changed.
+    #
+    # Eight hex characters, matching `list.py`'s ID column exactly, so the two
+    # can be compared by eye. It is an *identity* hint, not an authenticator —
+    # a peer still chooses its own session_id, so this distinguishes sessions,
+    # it does not prove who they are.
+    #
+    # Costs ~13 characters of the STDOUT_CAP budget (see shared.STDOUT_CAP on
+    # why that budget is tight). Judged worth it: a truncated body has a
+    # `cont` pointer to the full text, a misattributed sender has nothing.
+    sid_part = f" sid={from_sid}" if from_sid else ""
     if was_truncated:
-        prefix = f'[inter-session msg={msg_id} from="{from_name}"{label_part} truncated={full_len}]'
+        prefix = (f'[inter-session msg={msg_id} from="{from_name}"{sid_part}'
+                  f'{label_part} truncated={full_len}]')
     else:
-        prefix = f'[inter-session msg={msg_id} from="{from_name}"{label_part}]'
+        prefix = (f'[inter-session msg={msg_id} from="{from_name}"{sid_part}'
+                  f'{label_part}]')
     return f"{prefix} {truncated}"
 
 
