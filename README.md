@@ -196,7 +196,13 @@ invoke `/hubbub:talk`.
 
 By default the monitor starts at **every session open**, so a session is
 reachable by its peers without anyone having to invoke anything in it
-first. If you would rather sessions opt in, `/hubbub:talk auto-start off` stops
+first. Installing the plugin asks you about this directly — the
+`auto_start` setting — so it is a choice you make rather than a default
+you have to discover. Leaving it on means every Claude Code session on
+the machine is addressable by every other one; that is the point of the
+tool, and it is worth knowing you have agreed to it.
+
+If you would rather sessions opt in, `/hubbub:talk auto-start off` stops
 the plugin starting a monitor at all — it records the choice under the
 data directory as well as in the plugin manifest, so a later
 `/plugin update` cannot quietly hand always-on back to you. Connecting

@@ -33,7 +33,8 @@ def fake_plugin_root(tmp_path: Path) -> Path:
 
 
 def _run(args: list[str], plugin_root: Path | None,
-         data_dir: Path | None = None) -> subprocess.CompletedProcess:
+         data_dir: Path | None = None,
+         extra_env: dict | None = None) -> subprocess.CompletedProcess:
     # auto_start now mirrors the setting into the data dir (so a plugin update
     # can't silently undo an opt-out), so every run needs one of its own or it
     # would reach into the developer's real ~/.claude/data.
@@ -52,6 +53,8 @@ def _run(args: list[str], plugin_root: Path | None,
            "HUBBUB_DATA_DIR": str(data_dir)}
     if plugin_root is not None:
         env["CLAUDE_PLUGIN_ROOT"] = str(plugin_root)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         capture_output=True, text=True, env=env,
@@ -197,6 +200,45 @@ class TestDurableOptOut:
         r = _run(["--status"], fake_plugin_root, data_dir=data)
         assert "opt-out" in r.stdout
         assert "wins" in r.stdout
+
+
+class TestUserConfigAutoStart:
+    """fork #22. The `auto_start` userConfig is a third source of truth that
+    this command cannot write, so its job is to never hide it."""
+
+    OFF = {"CLAUDE_PLUGIN_OPTION_AUTO_START": "false"}
+
+    def test_status_reports_the_plugin_config(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        r = _run(["--status"], fake_plugin_root, data_dir=tmp_path / "d",
+                 extra_env=self.OFF)
+        assert "auto_start is set to false" in r.stdout
+
+    def test_on_is_not_claimed_when_the_config_forbids_it(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """The dead end this ticket had to either fix or expose: `--on` writes
+        the manifest and clears the opt-out, both successfully, and the monitor
+        still exits. Reporting success there would leave the user with no way
+        to connect the command to the behaviour."""
+        r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d",
+                 extra_env=self.OFF)
+        assert "NOT applied" in r.stdout
+        assert "/plugin" in r.stdout
+
+    def test_absent_config_is_not_read_as_off(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        """`--plugin-dir` local-dev mode never prompts for userConfig, so the
+        var is simply absent there. Absent must mean "no opinion"; treating it
+        as off would disable auto-start for every local-dev session."""
+        r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d")
+        assert "NOT applied" not in r.stdout
+        assert "auto_start is set to false" not in r.stdout
+
+    def test_truthy_config_is_not_read_as_off(
+            self, fake_plugin_root: Path, tmp_path: Path):
+        r = _run(["--on"], fake_plugin_root, data_dir=tmp_path / "d",
+                 extra_env={"CLAUDE_PLUGIN_OPTION_AUTO_START": "true"})
+        assert "NOT applied" not in r.stdout
 
 
 class TestPartialFailure:

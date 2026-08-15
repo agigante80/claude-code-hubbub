@@ -160,6 +160,47 @@ class TestResolveLabel:
             client_mod._resolve_label("a" * (shared.LABEL_MAX_CP + 1), None, str(tmp_path))
 
 
+class TestAutostartWanted:
+    """fork #22: `_autostart_wanted` is what actually enforces the setting,
+    since `when` is read by CC before any of our code runs."""
+
+    def test_default_is_on(self, tmp_data_dir, monkeypatch):
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_AUTO_START", raising=False)
+        assert client_mod._autostart_wanted() is True
+
+    @pytest.mark.parametrize("value", ["false", "FALSE", " off ", "0", "no"])
+    def test_falsey_spellings_turn_it_off(self, tmp_data_dir, monkeypatch, value):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", value)
+        assert client_mod._autostart_wanted() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "ON", "yes"])
+    def test_truthy_spellings_leave_it_on(self, tmp_data_dir, monkeypatch, value):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", value)
+        assert client_mod._autostart_wanted() is True
+
+    def test_unparseable_value_does_not_disable(self, tmp_data_dir, monkeypatch):
+        """`bool("banana")` is True and `bool("false")` is also True, so the
+        parse has to be explicit. An unrecognised value falls back to the
+        default rather than guessing in either direction."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", "banana")
+        assert client_mod._autostart_wanted() is True
+
+    def test_optout_file_beats_a_truthy_config(self, tmp_data_dir, monkeypatch):
+        """`/hubbub:talk auto-start off` is the later explicit act and must win
+        over the install-time answer, including after a `/plugin update`
+        restores the shipped manifest."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_AUTO_START", "true")
+        p = shared.autostart_optout_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+        assert client_mod._autostart_wanted() is False
+
+    def test_legacy_env_spelling_still_honoured(self, tmp_data_dir, monkeypatch):
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_AUTO_START", raising=False)
+        monkeypatch.setenv("INTER_SESSION_AUTO_START", "false")
+        assert client_mod._autostart_wanted() is False
+
+
 class TestFormatMsg:
     def test_basic_msg(self):
         msg = {"op": "msg", "msg_id": "ab12", "from": "x", "from_name": "alpha",

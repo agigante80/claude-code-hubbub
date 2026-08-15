@@ -109,6 +109,39 @@ class TestMonitorsJson:
             )
 
 
+class TestAutoStartUserConfig:
+    """fork #22: the auto-start choice is surfaced at install rather than only
+    reachable by knowing `/hubbub:talk auto-start off` exists."""
+
+    def _cfg(self):
+        return json.loads(
+            (REPO / ".claude-plugin" / "plugin.json").read_text()
+        )["userConfig"]
+
+    def test_auto_start_is_declared_and_defaults_on(self):
+        entry = self._cfg()["auto_start"]
+        assert entry["type"] == "boolean"
+        # Default must stand alone: `--plugin-dir` local-dev mode never prompts
+        # for userConfig, so an absent value has to mean today's behaviour.
+        assert entry["default"] is True
+
+    def test_when_stays_always_in_the_manifest(self):
+        """The setting is enforced in client.py, not by templating `when`.
+
+        `when` is read by CC's monitor scheduler before any of our code runs,
+        so an env var cannot drive it — and `${user_config.*}` substitution is
+        forbidden here because it breaks `--plugin-dir` mode. The monitor
+        therefore always starts and exits on its own when told to.
+        """
+        m = json.loads((REPO / "monitors" / "monitors.json").read_text())[0]
+        assert m["when"] == "always"
+        assert "user_config" not in json.dumps(m)
+
+    def test_no_userconfig_substitution_anywhere_in_monitors(self):
+        raw = (REPO / "monitors" / "monitors.json").read_text()
+        assert "${user_config" not in raw
+
+
 class TestSkillMdLocation:
     def test_skill_md_in_skills_subdir(self):
         """Plugins use auto-discovery: skills/<name>/SKILL.md. Anything else

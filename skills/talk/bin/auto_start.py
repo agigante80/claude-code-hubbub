@@ -148,7 +148,30 @@ def cmd_status() -> int:
             # opt-out is what is actually in force.
             print("  note: monitors.json says always, but the opt-out above "
                   "wins — the monitor exits immediately at session open.")
+    if _userconfig_says_off():
+        # Third source of truth, and the only one this command cannot change.
+        # Reporting it matters more than it looks: without this line, a user
+        # who chose "no" at install and later runs `auto-start on` gets a
+        # success message and a monitor that keeps exiting, with nothing
+        # anywhere connecting the two.
+        print("  plugin config: auto_start is set to false")
+        if not optout.exists():
+            print("  note: the monitor exits at session open because of that "
+                  "setting, whatever `when` says. This command cannot change "
+                  "it — use /plugin to edit the hubbub config.")
     return 0
+
+
+def _userconfig_says_off() -> bool:
+    """Is the `auto_start` userConfig explicitly false in this process's env?
+
+    Only meaningful when CC injected it, which it does for the monitor and for
+    skill-invoked commands in an installed plugin. Absent in `--plugin-dir`
+    local-dev mode, where CC does not prompt for userConfig at all — so absence
+    must read as "no opinion", never as "off".
+    """
+    v = os.environ.get("CLAUDE_PLUGIN_OPTION_AUTO_START")
+    return v is not None and v.strip().lower() in {"0", "false", "no", "off"}
 
 
 def cmd_set(target: str) -> int:
@@ -207,8 +230,11 @@ def cmd_set(target: str) -> int:
         # at once even when CC still starts it.
         effective = optout_present or when_now == LAZY
     else:
-        # On needs both: a lingering flag would exit the monitor CC just spawned.
-        effective = (not optout_present) and when_now == ALWAYS
+        # On needs all three: a lingering flag would exit the monitor CC just
+        # spawned, and so would a userConfig `auto_start: false` — which this
+        # command has no way to change, so claiming success would be a lie.
+        effective = ((not optout_present) and when_now == ALWAYS
+                     and not _userconfig_says_off())
 
     failed = ([] if manifest_ok else ["the plugin manifest"]) + \
             ([] if optout_ok else ["the saved setting"])
@@ -224,6 +250,10 @@ def cmd_set(target: str) -> int:
         # change that is not in force is worse than saying nothing, and
         # SKILL.md has the agent surface stdout.
         print(f"auto-start: {target!r} NOT applied{detail}")
+        if target == ALWAYS and _userconfig_says_off():
+            print("  reason: the plugin's auto_start config is false, which "
+                  "this command cannot change. Edit it with /plugin — the "
+                  "manifest and the saved setting are already correct.")
     elif when_now != prev:
         print(f"auto-start: {prev!r} -> {target!r}{detail}")
         print("Reload to apply: /reload-plugins (or open a new Claude Code session).")
