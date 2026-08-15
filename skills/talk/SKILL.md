@@ -478,6 +478,13 @@ surface this to the user after running.
 | `/hubbub:talk auto-start on`          | `python3 <bin>/auto_start.py --on`                |
 | `/hubbub:talk auto-start off`         | `python3 <bin>/auto_start.py --off`               |
 
+**If it reports `NOT applied … inside the git work tree`**, the plugin you
+resolved to is a source checkout, not an installed plugin — writing it would
+leave the user with a modified tracked file. Surface the message; do not add
+`--force` on your own initiative. `--force` is for a `--plugin-dir` local-dev
+install, where the checkout genuinely is the plugin, and that is the user's
+call to make.
+
 `on` = `when: "always"` (start at every session open).
 `off` = no auto-start at all: `when` goes to `on-skill-invoke:talk` *and*
 a durable opt-out is recorded under the data dir, so a plugin-started

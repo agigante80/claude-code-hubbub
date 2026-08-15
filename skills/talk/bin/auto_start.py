@@ -42,21 +42,46 @@ MONITOR_NAME = "hubbub-client"
 def _is_our_plugin_root(root: Path) -> bool:
     """Does `root` carry hubbub's own plugin manifest?
 
-    The marker only this plugin's root has. Used to validate an *inferred*
-    root, never an explicit one — see `_resolve_monitors_path`.
+    The marker only this plugin's root has. Applied to both the inferred root
+    and an explicit `CLAUDE_PLUGIN_ROOT` — "honour it or fail" and "prove it is
+    ours" are not in conflict.
     """
     try:
+        # `errors="replace"`, not the ambient locale, is what keeps this total:
+        # UnicodeDecodeError is a ValueError raised during *decode*, so neither
+        # OSError nor JSONDecodeError below would catch it, and an undecodable
+        # manifest would produce a traceback instead of the clean refusal this
+        # function exists to give. Do not "simplify" this to read_text().
         raw = (root / ".claude-plugin" / "plugin.json").read_text(
             encoding="utf-8", errors="replace")
         manifest = json.loads(raw)
     except (OSError, json.JSONDecodeError):
-        # `errors="replace"` rather than the ambient locale: a UnicodeDecodeError
-        # is a ValueError, not an OSError, and json.JSONDecodeError does not
-        # cover it either — the failure happens during decode, before parsing.
-        # An undecodable manifest would have produced a traceback instead of
-        # the clean refusal this function exists to give.
         return False
     return isinstance(manifest, dict) and manifest.get("name") == "hubbub"
+
+
+def _git_worktree_root(start: Path) -> Path | None:
+    """Nearest ancestor of `start` containing a `.git` entry, else None.
+
+    The discriminator #29 needed, and it is a property of the *target* rather
+    than of the path used to invoke us — which is the whole point. The
+    symlink guard below compares invocation path against resolved path, so it
+    cannot fire when the caller passes an already-resolved path
+    (`readlink -f`, `cd -P`, or a harness that prints realpaths). At that
+    point the two invocations are byte-identical and no amount of cleverness
+    about the path can tell them apart.
+
+    What *can* be told apart is what we are about to write to. Measured on
+    this machine: the installed plugin at
+    `~/.claude/plugins/cache/hubbub/hubbub/0.2.0` — the real target — has no
+    `.git`; a development checkout does. So "am I about to dirty someone's
+    tracked working tree" is answerable regardless of how we got here, and
+    dirtying a checkout was the actual harm in #16.
+    """
+    for d in (start, *start.parents):
+        if (d / ".git").exists():
+            return d
+    return None
 
 
 def _resolve_monitors_path() -> Path:
@@ -122,17 +147,35 @@ def _resolve_monitors_path() -> Path:
     literal_root = Path(os.path.abspath(__file__)).parents[3]
     crossed_symlink = literal_root.resolve() != resolved_root
 
+    # Symlinking a live checkout's skill dir *into* an installed plugin is a
+    # reasonable way to develop against a real install. There the literal root
+    # is the installed plugin, carrying the manifest that genuinely should be
+    # edited — so prefer it rather than refusing and leaving auto-start
+    # unconfigurable from that install (fork #29).
+    if crossed_symlink and _is_our_plugin_root(literal_root):
+        lp = literal_root / "monitors" / "monitors.json"
+        if lp.is_file():
+            return lp
+
     root = resolved_root
     p = root / "monitors" / "monitors.json"
     if p.is_file() and _is_our_plugin_root(root) and not crossed_symlink:
         return p
 
     if crossed_symlink:
+        # Name the *symlink*, not `parents[3]`. The link is the skill dir —
+        # `~/.claude/skills/talk` for the documented install — and reporting
+        # `~/.claude` instead told users their home config directory was a
+        # symlink, which it is not.
+        skill_dir = Path(os.path.abspath(__file__)).parents[1]
+        over_there = resolved_root / "monitors" / "monitors.json"
+        detail = (f"Editing {over_there} would only dirty that checkout."
+                  if over_there.is_file() else
+                  f"There is no plugin manifest at {resolved_root} either.")
         sys.stderr.write(
-            f"auto_start: {literal_root} is a symlinked skill install pointing "
-            f"into {resolved_root}. auto-start is a plugin feature and this "
-            f"install governs no plugin monitor; editing the manifest over "
-            f"there would only dirty that checkout. Nothing to configure — the "
+            f"auto_start: {skill_dir} is a symlink into {resolved_root}. "
+            f"auto-start is a plugin feature and a symlinked skill install "
+            f"governs no plugin monitor. {detail} Nothing to configure — the "
             f"skill works as normal and `/hubbub:talk connect` starts its own "
             f"monitor.\n"
         )
@@ -296,7 +339,7 @@ def _env_says_off() -> str | None:
     return None
 
 
-def cmd_set(target: str) -> int:
+def cmd_set(target: str, force: bool = False) -> int:
     # Locate and validate the manifest BEFORE touching durable state. These
     # three exit(2) on a missing or malformed file, and a standalone-skill copy
     # legitimately has no monitors.json — it governs no plugin monitor, so it
@@ -316,6 +359,28 @@ def cmd_set(target: str) -> int:
     # command that reported doing nothing has in fact destroyed the user's
     # recorded choice, and a later change to the env would silently make the
     # machine always-on with nothing left saying they had opted out.
+    # The guard that does not depend on how we were invoked (fork #29). The
+    # symlink check in `_resolve_monitors_path` cannot fire when the caller
+    # passes an already-resolved path, and at that point nothing about the
+    # path distinguishes "ran the repo's copy on purpose" from "followed a
+    # symlink into it". What is still knowable is what we are about to write
+    # to — and the harm in #16 was dirtying a tracked working tree.
+    #
+    # Safe by construction for real installs: the plugin cache carries no
+    # `.git`. A development checkout does, and so does the marketplace clone,
+    # where an edit would be discarded by the next update anyway.
+    #
+    # `--status` is unaffected; this is only on the write path.
+    worktree = _git_worktree_root(path)
+    if worktree is not None and not force:
+        print(f"auto-start: {target!r} NOT applied — {path} is inside the git "
+              f"work tree at {worktree}, so writing it would leave you with a "
+              f"modified tracked file. That is how this command once dirtied "
+              f"the repo it was being developed in. Nothing was modified.")
+        print(f"  If this really is the plugin you want to configure "
+              f"(a --plugin-dir local-dev install), re-run with --force.")
+        return 1
+
     blocking_key = _env_says_off() if target == ALWAYS else None
     if blocking_key:
         print(f"auto-start: {target!r} NOT applied — {blocking_key} is set to "
@@ -416,15 +481,19 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--status", action="store_true", help="print current setting")
     g.add_argument("--on", action="store_true", help=f'set when="{ALWAYS}"')
     g.add_argument("--off", action="store_true", help=f'set when="{LAZY}"')
+    parser.add_argument(
+        "--force", action="store_true",
+        help="write the manifest even when it is a tracked file in a git "
+             "work tree (a --plugin-dir local-dev install)")
     args = parser.parse_args(argv)
     shared.migrate_legacy_data_dir()
 
     if args.status:
         return cmd_status()
     if args.on:
-        return cmd_set(ALWAYS)
+        return cmd_set(ALWAYS, force=args.force)
     if args.off:
-        return cmd_set(LAZY)
+        return cmd_set(LAZY, force=args.force)
     return 2  # unreachable due to required=True
 
 
