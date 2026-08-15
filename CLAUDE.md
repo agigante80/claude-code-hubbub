@@ -580,6 +580,13 @@ prose so prose edits can't accidentally drop a guardrail.
   `proc.stdout.readline()` — see the concurrency note under Common
   commands for why the latter hangs the suite rather than failing it.
 - **Slow tests** (`@pytest.mark.slow`): subprocess-spawning, >1 s.
+- **Skips fail the run.** `conftest.pytest_sessionfinish` turns any skipped
+  test into a red build, because `495 passed, 1 skipped` reads as success and
+  the test that did not run is the one nobody looks at. The only conditional
+  skips here are guarded on `os.geteuid() == 0` — they need `chmod 000` to
+  actually deny access, and root bypasses DAC — so **run the suite as a
+  non-root user**, which is what keeps the count at zero. `--allow-skips` is
+  the escape hatch when a skip is genuinely intended.
 
 ## Don't
 

@@ -49,3 +49,49 @@ def _reset_migration_flag():
     shared._unmigrated_this_run = False
     yield
     shared._unmigrated_this_run = False
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--allow-skips", action="store_true", default=False,
+        help="Permit skipped tests. Without this the run fails if any test "
+             "was skipped — see pytest_sessionfinish for why.",
+    )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run if any test was skipped.
+
+    A skip is invisible in a green summary: `495 passed, 1 skipped` reads as
+    success, and the one that did not run is the one nobody looks at. The two
+    conditional skips in this suite are guarded on `os.geteuid() == 0` — they
+    verify that an unreadable data directory is *reported* rather than
+    crashing the diagnostic, and root bypasses DAC so `chmod 000` denies it
+    nothing. CI containers commonly run as root, so precisely those two would
+    have vanished in the environment that matters most.
+
+    Making the run red instead means a skip has to be a decision. Pass
+    `--allow-skips` when you genuinely intend one (an OS-specific test on the
+    wrong OS, say) — and prefer running the suite as a non-root user, which
+    is what makes the count zero here.
+    """
+    if session.config.getoption("--allow-skips"):
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        return
+    skipped = reporter.stats.get("skipped", [])
+    if not skipped:
+        return
+    reporter.write_sep("=", "skipped tests are not allowed", red=True)
+    for rep in skipped:
+        where = getattr(rep, "nodeid", "?")
+        reason = ""
+        if isinstance(getattr(rep, "longrepr", None), tuple) and len(rep.longrepr) == 3:
+            reason = rep.longrepr[2]
+        reporter.write_line(f"  {where}  {reason}")
+    reporter.write_line(
+        "Re-run as a non-root user, or pass --allow-skips if the skip is "
+        "intended."
+    )
+    session.exitstatus = 1
