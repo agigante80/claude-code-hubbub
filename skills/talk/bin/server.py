@@ -596,6 +596,7 @@ class Server:
         # bypass the cap. Charge AFTER liveness so dead-listener attempts
         # don't consume quota.
         now = time.monotonic()
+        self._prune_broadcast_windows(now)
         window = self._broadcast_windows.setdefault(from_id, deque())
         while window and (now - window[0]) > 60:
             window.popleft()
@@ -736,6 +737,32 @@ class Server:
             await target.ws.send(json.dumps(msg))
         except websockets.ConnectionClosed:
             pass
+
+    def _prune_broadcast_windows(self, now: float) -> None:
+        """Drop rate-limit windows that are both fully expired and whose
+        listener is gone.
+
+        `_broadcast_windows` was written with `setdefault` and never deleted —
+        `_unregister` pops the registry but not this — so it grew one entry per
+        session_id that ever broadcast, for the whole life of the server. With
+        `when: "always"` every session on the machine registers at open and
+        they turn over constantly, so the entry count is unbounded (fork #20).
+
+        **Deliberately not pruned on disconnect.** Dropping a window when its
+        listener leaves would let a sender reset its quota by bouncing the
+        monitor, which is cheap and scriptable. An entry is only removed once
+        its entire 60 s window has expired — at which point it grants nothing,
+        so removing it changes no behaviour and only reclaims the dict slot.
+
+        O(n) per broadcast, but n stays small precisely because this runs.
+        """
+        stale = [
+            sid for sid, window in self._broadcast_windows.items()
+            if (not window or (now - window[-1]) > 60)
+            and sid not in self._registry
+        ]
+        for sid in stale:
+            del self._broadcast_windows[sid]
 
     async def _unregister(self, state: ClientState) -> None:
         async with self._registry_lock:

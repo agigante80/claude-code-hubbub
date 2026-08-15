@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 
 import pytest
@@ -1092,3 +1093,156 @@ class TestPeerEvents:
             assert left["session_id"] == sid_b
         finally:
             await ws_a.close()
+
+
+class TestConcurrentRegistration:
+    """fork #20. Twenty-three review rounds went into `0.2.0` and essentially
+    all of it landed on the client, the migration and `list.py`'s staleness
+    logic. `server.py`'s concurrency was never examined — and `when: "always"`
+    turned registration from an occasional user-paced event into a burst that
+    happens whenever several sessions open together, which on this fleet is
+    normal.
+    """
+
+    async def test_burst_of_distinct_names_all_register(self, running_server):
+        srv, port, token = running_server
+        n = 12
+        conns = [await _connect(port) for _ in range(n)]
+        try:
+            results = await asyncio.gather(*[
+                _hello(ws, token, name=f"peer-{i}") for i, ws in enumerate(conns)
+            ])
+            for _sid, welcome in results:
+                assert welcome["op"] == "welcome", welcome
+            assert len(srv._registry) == n
+            # Every session_id distinct: a shared dict mutated from N handlers
+            # would show up here as a lost entry.
+            assert len({sid for sid, _ in results}) == n
+        finally:
+            for ws in conns:
+                await ws.close()
+
+    async def test_burst_on_one_name_yields_exactly_one_winner(self, running_server):
+        """The taken-name scan and the candidate list are computed inside
+        `_registry_lock`, so contention must resolve to one holder of the bare
+        name and distinct suffixes for the rest — never two agents answering to
+        the same name, which would make `send --to` ambiguous or wrong."""
+        srv, port, token = running_server
+        n = 8
+        conns = [await _connect(port) for _ in range(n)]
+        try:
+            results = await asyncio.gather(*[
+                _hello(ws, token, name="samename") for ws in conns
+            ], return_exceptions=True)
+            accepted = [r for r in results
+                        if not isinstance(r, Exception) and r[1].get("op") == "welcome"]
+            rejected = [r for r in results
+                        if not isinstance(r, Exception) and r[1].get("op") == "error"]
+            assert len(accepted) + len(rejected) == n
+            # Exactly one may hold the bare name.
+            names = [c.name for c in srv._registry.values()]
+            assert names.count("samename") <= 1, names
+            # And no two agents share any name.
+            assert len(names) == len(set(names)), names
+            for _sid, err in rejected:
+                assert err["code"] == shared.ErrorCode.NAME_TAKEN, err
+                # The suggestion must not be a name already in the registry,
+                # or the client burns a retry per hop and gives up.
+                for cand in err.get("candidates", []):
+                    assert cand not in names, (cand, names)
+        finally:
+            for ws in conns:
+                await ws.close()
+
+    async def test_repeated_reconnect_for_one_session_id_leaves_one_entry(
+            self, running_server):
+        """`existing_same_sid` pops the registry and closes the old socket, the
+        close deferred until after the lock is released. Bouncing the same
+        session_id must converge on exactly one live entry rather than leaking
+        or losing it."""
+        srv, port, token = running_server
+        sid = str(uuid.uuid4())
+        # The nonce is client-supplied and recorded at registration, not
+        # issued by the server — it is what proves continuity on reconnect.
+        nonce = uuid.uuid4().hex
+        ws = await _connect(port)
+        _, welcome = await _hello(ws, token, name="bouncer",
+                                  session_id=sid, nonce=nonce)
+        assert welcome["op"] == "welcome", welcome
+        conns = [ws]
+        try:
+            for _ in range(5):
+                nxt = await _connect(port)
+                conns.append(nxt)
+                _, w = await _hello(nxt, token, name="bouncer",
+                                    session_id=sid, nonce=nonce)
+                assert w["op"] == "welcome", w
+            assert list(srv._registry) == [sid], list(srv._registry)
+            # And a reconnect WITHOUT the nonce must still be refused, or the
+            # pop-and-replace path becomes a way to kick a peer off the bus
+            # using only its session_id, which leaks via list_ok.
+            impostor = await _connect(port)
+            conns.append(impostor)
+            _, refused = await _hello(impostor, token, name="bouncer",
+                                      session_id=sid)
+            assert refused["op"] == "error", refused
+            assert refused["code"] == shared.ErrorCode.UNAUTHORIZED, refused
+            assert list(srv._registry) == [sid], list(srv._registry)
+        finally:
+            for c in conns:
+                await c.close()
+
+    async def test_broadcast_windows_do_not_grow_without_bound(
+            self, running_server):
+        """The rate-limit dict was written with `setdefault` and never deleted,
+        so it grew one entry per session_id that ever broadcast, for the life
+        of the server. Unbounded with `when: "always"`, where sessions turn
+        over constantly."""
+        srv, port, token = running_server
+        # A permanent resident, so there is always someone to broadcast to and
+        # the pruner has a registered entry it must NOT collect.
+        resident = await _connect(port)
+        rsid, _ = await _hello(resident, token, name="resident")
+        try:
+            for i in range(6):
+                ws = await _connect(port)
+                await _hello(ws, token, name=f"transient-{i}")
+                await _send_op(ws, "broadcast", text="hi")
+                await _drain(ws, timeout=0.2)
+                await ws.close()
+                await asyncio.sleep(0.05)
+            assert len(srv._broadcast_windows) >= 6, "nothing to collect"
+            # Age every departed sender's window past the 60 s limit, then let
+            # a NORMAL broadcast drive the collection. Calling the pruner
+            # directly would still pass if someone removed its call site from
+            # the broadcast path, which is the failure worth guarding.
+            old = time.monotonic() - 3600
+            for sid_, window in srv._broadcast_windows.items():
+                if sid_ != rsid:
+                    for i in range(len(window)):
+                        window[i] = old
+            await _send_op(resident, "broadcast", text="trigger")
+            await _drain(resident, timeout=0.3)
+            leftover = set(srv._broadcast_windows) - {rsid}
+            assert not leftover, f"windows leaked for departed senders: {leftover}"
+        finally:
+            await resident.close()
+
+    async def test_pruning_cannot_be_used_to_reset_a_quota(self, running_server):
+        """Pruning on disconnect would let a sender clear its rate-limit window
+        by bouncing the monitor. A registered sender's window must survive a
+        prune even when its entries are old."""
+        srv, port, token = running_server
+        ws = await _connect(port)
+        sid, _ = await _hello(ws, token, name="loud")
+        try:
+            await _send_op(ws, "broadcast", text="one")
+            await _drain(ws, timeout=0.2)
+            assert sid in srv._broadcast_windows
+            srv._prune_broadcast_windows(time.monotonic() + 120)
+            assert sid in srv._broadcast_windows, (
+                "a registered sender's window was collected; it could reset "
+                "its quota by waiting out the window while staying connected"
+            )
+        finally:
+            await ws.close()
