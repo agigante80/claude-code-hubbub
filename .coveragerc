@@ -1,0 +1,23 @@
+# Coverage config. Kept as a tracked file so `make coverage` produces the same
+# number for everyone, rather than depending on flags someone remembers.
+[run]
+branch = True
+# Subprocess-spawning tests are most of the integration value here, and their
+# children are separate processes — without parallel mode plus the startup
+# hook the Makefile installs, `auto_start.py` and `doctor.py` report 0%
+# because they are only ever exercised through a subprocess. That reads as
+# "untested" when they are in fact 90% and 78%, and it drags the headline
+# figure from 82% to 68%.
+parallel = True
+concurrency = thread,multiprocessing
+source = skills/talk/bin
+omit = */__pycache__/*
+
+[report]
+show_missing = True
+skip_covered = False
+# The floor, not the target. Set just under the 82% measured when this was
+# introduced, so an ordinary refactor does not fail the build but a real
+# regression does. Raise it when the thin modules (discover.py 61%,
+# relabel.py 65%) come up.
+fail_under = 80

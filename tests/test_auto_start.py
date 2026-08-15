@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import waiting
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "skills" / "talk" / "bin" / "auto_start.py"
 ALWAYS = "always"
@@ -58,7 +60,7 @@ def _run(args: list[str], plugin_root: Path | None,
             )
         data_dir = Path(tempfile.mkdtemp(dir=str(plugin_root))) / "data"
     env = {"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
-           "HUBBUB_DATA_DIR": str(data_dir)}
+           "HUBBUB_DATA_DIR": str(data_dir), **waiting.coverage_env()}
     if plugin_root is not None:
         env["CLAUDE_PLUGIN_ROOT"] = str(plugin_root)
     if extra_env:
@@ -337,7 +339,8 @@ class TestRootResolution:
             [sys.executable, str(skill_bin / "auto_start.py"), "--off"],
             capture_output=True, text=True,
             env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
-                 "HUBBUB_DATA_DIR": str(tmp_path / "data")},
+                 "HUBBUB_DATA_DIR": str(tmp_path / "data"),
+                 **waiting.coverage_env()},
         )
         assert r.returncode == 2, r.stdout
         assert "not a hubbub plugin root" in r.stderr
@@ -367,7 +370,8 @@ class TestRootResolution:
                      "auto_start.py"), "--off"],
                 capture_output=True, text=True,
                 env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
-                     "HUBBUB_DATA_DIR": str(tmp_path / "data")},
+                     "HUBBUB_DATA_DIR": str(tmp_path / "data"),
+                     **waiting.coverage_env()},
             )
             assert r.returncode == 2, r.stdout
             assert "symlinked skill install" in r.stderr
@@ -424,7 +428,8 @@ class TestRootResolution:
             [sys.executable, str(skill_bin / "auto_start.py"), "--status"],
             capture_output=True, text=True,
             env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
-                 "HUBBUB_DATA_DIR": str(tmp_path / "data")},
+                 "HUBBUB_DATA_DIR": str(tmp_path / "data"),
+                 **waiting.coverage_env()},
         )
         assert r.returncode == 2
         assert "standalone skill install" in r.stderr
@@ -519,7 +524,8 @@ class TestPartialFailure:
             [sys.executable, str(standalone / "bin" / "auto_start.py"), "--on"],
             capture_output=True, text=True,
             env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
-                 "HUBBUB_DATA_DIR": str(data)},
+                 "HUBBUB_DATA_DIR": str(data),
+                 **waiting.coverage_env()},
         )
         assert r.returncode == 2, r.stdout
         assert (data / "autostart-off").exists(), (

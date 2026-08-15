@@ -104,3 +104,21 @@ def read_line(proc, timeout: float = DEFAULT_TIMEOUT) -> str:
     finally:
         sel.unregister(fd)
         sel.close()
+
+
+def coverage_env() -> dict:
+    """Env additions that let a subprocess be measured by `make coverage`.
+
+    Subprocess helpers deliberately build a *clean* env dict rather than
+    inheriting `os.environ` — that isolation is why they are trustworthy. But
+    it also means `COVERAGE_PROCESS_START` never reaches the child, so
+    `auto_start.py` and `doctor.py`, which are only ever exercised through
+    subprocesses, reported **0%** and dragged the headline figure from 82% to
+    68%. Reading that as "untested" would be exactly wrong: they are 90% and
+    78%.
+
+    Returns an empty dict outside a coverage run, so normal runs keep the
+    clean env unchanged.
+    """
+    start = os.environ.get("COVERAGE_PROCESS_START")
+    return {"COVERAGE_PROCESS_START": start} if start else {}

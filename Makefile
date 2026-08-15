@@ -16,7 +16,7 @@ SYS_PYTEST := $(SYS_VENV)/bin/pytest
 DEPS_STAMP := $(VENV)/.deps-stamp
 SYS_DEPS_STAMP := $(SYS_VENV)/.deps-stamp
 
-.PHONY: test test-fast test-system test-both versions clean help
+.PHONY: test test-fast test-system test-both coverage versions clean help
 .DEFAULT_GOAL := help
 
 # `make -j2 test-both` would otherwise run two pytest sessions at once. That
@@ -33,6 +33,7 @@ help:
 	@echo "  make test-fast    Skip subprocess-spawning tests (@pytest.mark.slow)."
 	@echo "  make test-system  Run the full suite under the SYSTEM python3 in $(SYS_VENV)."
 	@echo "  make test-both    Both of the above, sequentially. Use before shipping."
+	@echo "  make coverage     Full suite under coverage; fails below the floor in .coveragerc."
 	@echo "  make versions     Show which interpreter each venv resolves to."
 	@echo "  make clean        Remove both venvs."
 	@echo ""
@@ -61,6 +62,26 @@ test-system: $(SYS_DEPS_STAMP)
 
 test-both: test test-system
 
+# fork: coverage was never measured on this repo until it was asked for, and
+# the first measurement was wrong in a way worth preventing permanently.
+#
+# The subprocess tests are most of the integration value, and their children
+# are separate processes. coverage only sees them if `coverage.process_startup`
+# runs at interpreter start, which needs a .pth in site-packages — so this
+# target installs one into $(VENV) (regenerable, gitignored) rather than
+# expecting anyone to remember. Without it `auto_start.py` and `doctor.py`
+# report 0% and the total reads 68% instead of 82%.
+COV_PTH = $(shell $(VENV)/bin/python -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)/zz-hubbub-coverage-subprocess.pth
+
+coverage: $(DEPS_STAMP)
+	@echo "import coverage; coverage.process_startup()" > "$(COV_PTH)"
+	@rm -f .coverage .coverage.*
+	@COVERAGE_PROCESS_START=$(CURDIR)/.coveragerc \
+		$(VENV)/bin/python -m coverage run -m pytest -q
+	@$(VENV)/bin/python -m coverage combine
+	@$(VENV)/bin/python -m coverage report
+	@rm -f "$(COV_PTH)"
+
 versions:
 	@printf '%-16s ' "$(VENV):"; \
 	  [ -x $(VENV)/bin/python ] && $(VENV)/bin/python -V || echo "(not built)"
@@ -70,6 +91,7 @@ versions:
 
 clean:
 	rm -rf $(VENV) $(SYS_VENV)
+	rm -f .coverage .coverage.*
 
 $(DEPS_STAMP): $(DEV_REQS) $(RUNTIME_REQS)
 	@if command -v uv >/dev/null 2>&1; then \

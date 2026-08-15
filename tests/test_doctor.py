@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import waiting
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "skills" / "talk" / "bin" / "doctor.py"
 
@@ -22,7 +24,8 @@ def _run(home: Path, port: int = 59999) -> subprocess.CompletedProcess:
         [sys.executable, str(SCRIPT), "--port", str(port)],
         capture_output=True, text=True,
         env={"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
-             "HOME": str(home), "PYTHONPATH": str(REPO / "skills" / "talk")},
+             "HOME": str(home), "PYTHONPATH": str(REPO / "skills" / "talk"),
+             **waiting.coverage_env()},
     )
 
 
@@ -202,7 +205,8 @@ class TestEndpointResolution:
     def _run_env(self, home: Path, extra: dict) -> subprocess.CompletedProcess:
         env = {"PATH": "/usr/bin:/bin", "HUBBUB_NO_REEXEC": "1",
                "HOME": str(home),
-               "PYTHONPATH": str(REPO / "skills" / "talk")}
+               "PYTHONPATH": str(REPO / "skills" / "talk"),
+               **waiting.coverage_env()}
         env.update(extra)
         return subprocess.run([sys.executable, str(SCRIPT)],
                               capture_output=True, text=True, env=env)
