@@ -72,8 +72,16 @@ def _run_helper(script: str, env_data_dir, ppid_override, *args, timeout=10.0):
     )
 
 
-def _wait_for_state(env_data_dir, ppid, timeout=5.0):
-    """Wait for the listener state file at <ppid>.session to appear and be valid."""
+def _wait_for_state(env_data_dir, ppid, timeout=waiting.DEFAULT_TIMEOUT):
+    """Wait for the listener state file at <ppid>.session to appear and be valid.
+
+    Returns None on timeout, so **callers must assert on the result**. With the
+    padding sleeps gone this is the only registration guard left, and a silent
+    None turns "the listener never registered" into a confusing failure 15 s
+    later at `assert "hi from alpha" in output` with `got ''`. The default
+    matches waiting.DEFAULT_TIMEOUT; it was 5 s while everything around it
+    waited 15.
+    """
     end = time.time() + timeout
     path = env_data_dir / "clients" / f"{ppid}.session"
     while time.time() < end:
@@ -110,8 +118,10 @@ class TestSendHelper:
         listener_a = _spawn_listener(free_port, "alpha", tmp_data_dir, ppid_a)
         listener_b = _spawn_listener(free_port, "beta", tmp_data_dir, ppid_b)
         try:
-            _wait_for_state(tmp_data_dir, ppid_a)
-            _wait_for_state(tmp_data_dir, ppid_b)
+            assert _wait_for_state(tmp_data_dir, ppid_a) is not None, \
+                f"listener {ppid_a} never registered"
+            assert _wait_for_state(tmp_data_dir, ppid_b) is not None, \
+                f"listener {ppid_b} never registered"
             r = _run_helper("send.py", tmp_data_dir, ppid_a,
                             "--to", "beta", "--text", "hi from alpha")
             assert r.returncode == 0, f"stderr={r.stderr!r}"
@@ -136,7 +146,8 @@ class TestSendHelper:
         ppid = 20003
         listener = _spawn_listener(free_port, "alpha", tmp_data_dir, ppid)
         try:
-            _wait_for_state(tmp_data_dir, ppid)
+            assert _wait_for_state(tmp_data_dir, ppid) is not None, \
+                f"listener {ppid} never registered"
             r = _run_helper("send.py", tmp_data_dir, ppid,
                             "--to", "nobody", "--text", "hi")
             assert r.returncode == 1
@@ -161,8 +172,10 @@ class TestSendHelper:
         listener_a = _spawn_listener(free_port, "alpha", tmp_data_dir, ppid_a)
         listener_b = _spawn_listener(free_port, "beta", tmp_data_dir, ppid_b)
         try:
-            _wait_for_state(tmp_data_dir, ppid_a)
-            _wait_for_state(tmp_data_dir, ppid_b)
+            assert _wait_for_state(tmp_data_dir, ppid_a) is not None, \
+                f"listener {ppid_a} never registered"
+            assert _wait_for_state(tmp_data_dir, ppid_b) is not None, \
+                f"listener {ppid_b} never registered"
             r = _run_helper("send.py", tmp_data_dir, ppid_a,
                             "--all", "--text", "hello everyone")
             assert r.returncode == 0
@@ -189,8 +202,10 @@ class TestListHelper:
         listener_a = _spawn_listener(free_port, "alpha", tmp_data_dir, ppid_a)
         listener_b = _spawn_listener(free_port, "beta", tmp_data_dir, ppid_b)
         try:
-            _wait_for_state(tmp_data_dir, ppid_a)
-            _wait_for_state(tmp_data_dir, ppid_b)
+            assert _wait_for_state(tmp_data_dir, ppid_a) is not None, \
+                f"listener {ppid_a} never registered"
+            assert _wait_for_state(tmp_data_dir, ppid_b) is not None, \
+                f"listener {ppid_b} never registered"
             r = _run_helper("list.py", tmp_data_dir, ppid_a)
             assert r.returncode == 0, f"stderr={r.stderr!r}"
             assert "alpha" in r.stdout
@@ -208,7 +223,8 @@ class TestListHelper:
         ppid = 20031
         listener = _spawn_listener(free_port, "alpha", tmp_data_dir, ppid)
         try:
-            _wait_for_state(tmp_data_dir, ppid)
+            assert _wait_for_state(tmp_data_dir, ppid) is not None, \
+                f"listener {ppid} never registered"
             r = _run_helper("list.py", tmp_data_dir, ppid, "--self")
             assert r.returncode == 0
             assert "alpha" in r.stdout
@@ -228,7 +244,8 @@ class TestRelabelHelper:
         ppid = 20061
         listener = _spawn_listener(free_port, "relabelme", tmp_data_dir, ppid)
         try:
-            _wait_for_state(tmp_data_dir, ppid)
+            assert _wait_for_state(tmp_data_dir, ppid) is not None, \
+                f"listener {ppid} never registered"
             r = _run_helper("relabel.py", tmp_data_dir, ppid, "--label", "the controller")
             assert r.returncode == 0, f"stderr={r.stderr!r}"
             assert "relabeled" in r.stdout
@@ -304,13 +321,16 @@ class TestStaleStateCleanup:
         # longer recognizes.
         listener.kill()
         listener.wait(timeout=2)
-        # Wait on the precondition send.py actually checks — the listener
-        # flock being free — rather than sleeping and hoping. SIGKILL releases
-        # the flock, so this is normally instant; under load the old fixed
-        # 0.5 s was a guess about the wrong thing (fork #23).
+        # Assert the precondition send.py actually checks — the listener flock
+        # being free — instead of the old fixed 0.5 s, which was a guess about
+        # the wrong thing (fork #23). `listener.wait()` above already reaped
+        # the process and the kernel releases flocks at death, so this holds
+        # on the first poll; it is a stated invariant, not a real wait.
+        # Derives the path via shared.client_lock_path so it cannot drift out
+        # of step with production and start passing vacuously on a
+        # FileNotFoundError.
         assert waiting.wait_for(
-            lambda: not shared.listener_lock_held(
-                tmp_data_dir / "clients" / f"{ppid}.lock")
+            lambda: not shared.listener_lock_held(shared.client_lock_path(ppid))
         ), "listener flock never released after SIGKILL"
         state_path = tmp_data_dir / "clients" / f"{ppid}.session"
         stale = dict(state)
@@ -334,8 +354,7 @@ class TestStaleStateCleanup:
         listener.kill()
         listener.wait(timeout=2)
         assert waiting.wait_for(
-            lambda: not shared.listener_lock_held(
-                tmp_data_dir / "clients" / f"{ppid}.lock")
+            lambda: not shared.listener_lock_held(shared.client_lock_path(ppid))
         ), "listener flock never released after SIGKILL"
         state_path = tmp_data_dir / "clients" / f"{ppid}.session"
         stale = dict(state)

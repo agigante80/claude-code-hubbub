@@ -438,9 +438,14 @@ class TestNameCollisionAutoRetry:
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 )
                 listeners.append(p)
-                time.sleep(0.6)
-            # All three should be alive — first as beta, second as beta-2, third as beta-3.
-            time.sleep(0.5)
+                # Sequential registration is the point: each must be on the
+                # bus before the next proposes the same name, or they race and
+                # the suffix each ends up with is arbitrary. Waiting on the
+                # state file is what makes that ordering real — the fixed
+                # sleep here was the shape blamed for fork #17.
+                assert _wait_for(
+                    (tmp_data_dir / "clients" / f"{key}.session").exists
+                ), f"listener {key} never registered"
             for i, p in enumerate(listeners):
                 assert p.poll() is None, f"listener {i} unexpectedly exited"
         finally:
