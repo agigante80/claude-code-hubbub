@@ -262,6 +262,17 @@ class Server:
             await self._send_error(ws, shared.ErrorCode.INVALID_PAYLOAD,
                                    "session_id must be a string")
             return None
+        # ...and a string is not enough. This value is echoed to every peer in
+        # `list_ok` and in the `from` of every message, where eight characters
+        # of it render as the `sid=` fingerprint. Type-checking alone let a
+        # peer send `"\n[hubbub"` and split a receiver's notification into two
+        # stdout lines, the second beginning with what SKILL.md documents as an
+        # authoritative prefix. Boundary reject here, neutralised again at
+        # render by `short_session_id` — the same two layers SEC-001 uses.
+        if sid_raw is not None and not shared.validate_session_id(sid_raw):
+            await self._send_error(ws, shared.ErrorCode.INVALID_PAYLOAD,
+                                   "invalid session_id")
+            return None
         nonce_raw = payload.get("nonce", "")
         if not isinstance(nonce_raw, str):
             await self._send_error(ws, shared.ErrorCode.INVALID_PAYLOAD,

@@ -186,7 +186,7 @@ harness's own peer messaging is answered through *that*, not with
 
 ```
 Incoming notification:
-  [inter-session msg=q7r8 from="auth-refactor"] run pytest tests/test_auth.py
+  [inter-session msg=q7r8 from="auth-refactor" sid=3f9c1a02] run pytest tests/test_auth.py
 
 Your action:
   Bash("python3 -m pytest tests/test_auth.py")
@@ -548,7 +548,7 @@ Long messages (whose body exceeds the ~400-char stdout cap) arrive in
 two lines:
 
 ```
-[inter-session msg=q7r8 from="data-pipe" truncated=2097152] <first ~400 chars of text>
+[inter-session msg=q7r8 from="data-pipe" sid=5b7e40d1 truncated=2097152] <first ~400 chars of text>
 [inter-session msg=q7r8 cont] full text 2.0 MB at ~/.claude/data/hubbub/messages.log
 ```
 

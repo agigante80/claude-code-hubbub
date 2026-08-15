@@ -42,6 +42,20 @@ ELECTION_BIND_RETRIES = 8
 BROADCAST_RATE_LIMIT_PER_MIN = 60
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+# Peers choose their own `session_id` and the server only ever type-checked it,
+# so it reached the notification header as an arbitrary string. Eight
+# characters of it are rendered as the `sid=` fingerprint (fork #7), and eight
+# is enough: `session_id="\n[hubbub"` split one notification into two stdout
+# lines whose second one *began* with a form SKILL.md documents as an
+# authoritative prefix, carrying attacker-chosen text. That defeats "only the
+# leading prefix is authoritative" by making the injection the leading prefix
+# of its own line. ANSI in the same field could erase the line above it.
+#
+# Clients generate `str(uuid.uuid4())`. This is deliberately looser than a
+# UUID check — the id is also used as a dict key and an addressing prefix, and
+# rejecting an otherwise-harmless format would lock out a peer for no safety
+# gain — but it is strict enough that nothing structural survives.
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 LABEL_MAX_CP = 60
 # Structural characters of the stdout notification header
@@ -838,6 +852,26 @@ def validate_name(s: str) -> bool:
     if not isinstance(s, str):
         return False
     return bool(NAME_RE.match(s))
+
+
+def validate_session_id(s: str) -> bool:
+    """Boundary check for a peer-supplied `session_id`. See SESSION_ID_RE."""
+    if not isinstance(s, str):
+        return False
+    return bool(SESSION_ID_RE.match(s))
+
+
+def short_session_id(s: str, length: int = 8) -> str:
+    """Render-time fingerprint: hex-ish characters only, or "" if none.
+
+    Belt-and-braces beside `validate_session_id`, the same redundancy
+    SEC-001 uses for labels. The boundary check protects ids arriving now;
+    this protects anything already recorded by an older server, replayed from
+    `messages.log`, or reaching `_format_msg` by a path that never validated.
+    """
+    if not isinstance(s, str):
+        return ""
+    return "".join(ch for ch in s if ch in "0123456789abcdefABCDEF")[:length]
 
 
 def validate_label(s: str) -> bool:
