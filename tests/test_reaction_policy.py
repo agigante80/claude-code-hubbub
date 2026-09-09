@@ -115,6 +115,12 @@ class TestPrefixRenameStaging:
     """
 
     CODE = (REPO / "skills" / "talk" / "bin" / "client.py").read_text()
+    # `client.py` is not the only emitter. `shared.py` prints two more —
+    # the data-dir migration notices, one to stderr and one to the log —
+    # and a step-2 commit that follows CLAUDE.md's "19 literals in
+    # client.py" list literally will leave them on the old spelling. The
+    # mixing guard below reads both files for that reason.
+    SHARED = (REPO / "skills" / "talk" / "bin" / "shared.py").read_text()
 
     def test_policy_accepts_both_spellings(self):
         low = SKILL.lower()
@@ -150,9 +156,10 @@ class TestPrefixRenameStaging:
         """The failure step 2 is actually likely to produce.
 
         `client.py` has three message-header literals and sixteen
-        `[inter-session]` operational-notice literals. Flipping only the
-        headers looks done and passes a casual read, but strands every error
-        notice on the old spelling — and step 3 then drops that spelling from
+        `[inter-session]` operational-notice literals; `shared.py` adds two
+        migration notices, which the step-2 checklist does not mention.
+        Flipping only the headers looks done and passes a casual read, but
+        strands every error notice on the old spelling — and step 3 then drops that spelling from
         the policy, so the agent silently stops recognising them. One spelling
         or the other, never a mix.
 
@@ -163,16 +170,19 @@ class TestPrefixRenameStaging:
         approve.
         """
         emitted = [
-            ln for ln in self.CODE.splitlines()
+            ln
+            for src in (self.CODE, self.SHARED)
+            for ln in src.splitlines()
             if not ln.lstrip().startswith("#")
         ]
         body = "\n".join(emitted)
         old = body.count("[inter-session")
         new = body.count("[hubbub")
         assert (old > 0) != (new > 0), (
-            f"client.py mixes prefixes in emitted strings: {old} old, "
-            f"{new} new. Step 2 must move the message headers AND the "
-            f"operational notices in the same commit."
+            f"client.py + shared.py mix prefixes in emitted strings: {old} "
+            f"old, {new} new. Step 2 must move the message headers, the "
+            f"operational notices AND shared.py's migration notices in the "
+            f"same commit."
         )
 
     def test_continuation_line_moves_with_the_header(self):
