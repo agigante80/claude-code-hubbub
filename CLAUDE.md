@@ -64,8 +64,9 @@ first; write new memories there, not to the path-keyed store under
 once already — see `hubbub-local-workspace.md`).
 
 Both `.claude/memory/` and `.claude/handoffs/` are gitignored: they hold
-working notes about the maintainer, and this repo is public. Two lines in
-`.gitignore` to change that.
+working notes about the maintainer, and this repo is public. `.claude/overnight/`
+(the `working-overnight` queue, decisions and report) is ignored for the same
+reason. Three lines in `.gitignore` to change that.
 
 ## Common commands
 
@@ -74,9 +75,10 @@ Makefile bootstraps it on first use (uv preferred, stdlib `venv` as
 fallback). System Python is never touched.
 
 ```bash
+make                                         # help; the default goal
 make test                                    # full suite (~70 s), .venv
 make coverage                                # suite under coverage; gate at 80%
-make test-fast                               # skip the 19 @pytest.mark.slow tests
+make test-fast                               # skip the 20 @pytest.mark.slow tests
 make test-system                             # same suite under the SYSTEM python3
 make test-both                               # both interpreters, sequentially
 make versions                                # which Python each venv resolves to
@@ -146,21 +148,72 @@ deps inherit those plus pytest via `requirements-dev.txt`. Both reqs
 files install into `.venv` via `make test` — there's nothing to install
 by hand.
 
+### Every env var, in one place
+
+Env vars are the *only* working configuration route for an auto-started
+monitor (see the userConfig invariant), so this is the whole surface. Each
+has an `INTER_SESSION_*` alias, honoured indefinitely — `shared.env()` tries
+`HUBBUB_` first and falls back, so grepping for a literal `HUBBUB_FOO` misses
+the `shared.env("FOO")` call sites.
+
+| Var | Read by | Purpose |
+| :-- | :------ | :------ |
+| `HUBBUB_HOST` | `client.py`, `doctor.py` | Bind/connect host (default `127.0.0.1`). Not mentioned in `README.md` or `SKILL.md` — this table is its only documentation. |
+| `HUBBUB_PORT` | `client.py` | Bus port (default 9473). Ranked *after* `CLAUDE_PLUGIN_OPTION_PORT`, which never arrives — see the userConfig invariant. |
+| `HUBBUB_IDLE_MINUTES` | `client.py` | Idle-shutdown window (default 10). Same dead `CLAUDE_PLUGIN_OPTION_*` first rank. |
+| `HUBBUB_NAME` / `HUBBUB_LABEL` | `client.py` | Preseed the handle / display label without CLI args. `LABEL` feeds `_resolve_label`, so it is a runtime override that is **not** persisted to the project profile; `NAME` is likewise absent from `README.md`. |
+| `HUBBUB_AUTO_START` | `client.py::_autostart_wanted`, `auto_start.py` | Opt out of joining the bus at session open. Ranked below `<data-dir>/autostart-off`. |
+| `HUBBUB_DATA_DIR` | `shared.py` (so: everything) | Relocate the data dir. This is what `tmp_data_dir` sets, and the whole of the suite's isolation. |
+| `HUBBUB_NO_REEXEC` | the six re-exec'ing entry-points | Stay on the current interpreter instead of re-exec'ing into the runtime venv. Set process-wide by `tests/conftest.py`; set it for any manual repro. |
+| `HUBBUB_PPID_OVERRIDE` | `shared.resolve_listener_key` | Give a subprocess a distinct pseudo-ppid. |
+| `HUBBUB_MAX_COLLISION_RETRIES` | `client.py` | Name-collision retry budget (default 3). |
+
+`send.py` and `list.py` are absent from that table on purpose: they take the
+port from their listener's `.session` state file, not from the environment.
+Exporting `HUBBUB_PORT` in a shell therefore moves the monitor and leaves the
+helpers following it, which is the intended coupling — don't "fix" it by
+teaching them to read the env, or a stale export will point them at a port
+their own session isn't on.
+
 ### Suite status
 
-Green as of 2026-08-15: `491 passed in ~70 s` on Linux 7.0 / CPython
-3.14. The four tests that used to fail all start **two listeners at
-once**, and they were reporting the real server-election race — fixed
-in `0e33123` by the election flock (see the election invariant below).
-If any of them regresses, suspect the election, not the assertions.
+Green as of 2026-09-06: `496 passed in ~69 s` on Linux 7.0 / CPython
+3.12 (`make test-system`), 20 of them `@pytest.mark.slow`. The four
+tests that used to fail all start **two listeners at once**, and they
+were reporting the real server-election race — fixed in `0e33123` by
+the election flock (see the election invariant below). If any of them
+regresses, suspect the election, not the assertions.
 
-One `PytestUnraisableExceptionWarning` from CPython 3.14's asyncio
+Under the uv `.venv` (CPython 3.14) one
+`PytestUnraisableExceptionWarning` from asyncio's
 `_SelectorTransport.__del__` is expected noise, not a product bug.
+
+**Moving the checkout breaks both venvs, and `make` will not notice.**
+Venv console scripts carry an absolute shebang, and the `.deps-stamp`
+sentinel still looks fresh after a move, so `make test` re-runs a
+`pytest` whose interpreter path no longer exists. The symptom depends on
+how you invoke it and neither spelling names the cause: `make test` says
+`make: .venv/bin/pytest: No such file or directory` (the script is right
+there — it is the *shebang* target that is missing), and running it
+directly says `cannot execute: required file not found`. Both read as a
+missing system package rather than a stale path. `make clean && make test`
+is the fix, and it rebuilds `.venv-system` too.
+
+Note `.venv/bin/python` is a *symlink* and survives the move, so
+`.venv/bin/python -m pytest` still works — which is a good way to convince
+yourself the venv is fine when it is not.
+
+This checkout has now moved twice (`claude-code-inter-session` →
+`claude-code-hubbub`, then into `dev-personal/opensource/`), and the trap
+fired on the second move; cleared 2026-09-10 by `make clean`. Expect it
+again.
 
 ### Coverage, and the trap in measuring it
 
-`make coverage` reports **82%** (line + branch) and fails below the 80% floor
-in `.coveragerc`. Thinnest: `discover.py` 61% and `relabel.py` 65% — both are
+`make coverage` reported **82%** (line + branch) on 2026-08-15 and fails below
+the 80% floor in `.coveragerc`. Unlike the suite, it is not re-measured every
+session — treat the figure as of that date, not as current. Thinnest:
+`discover.py` 61% and `relabel.py` 65% — both are
 mostly error branches needing a real process tree or a live listener, and
 `discover.py` is the process-tree walk this file already flags as trap-laden,
 so that is the least comfortable number in the set.
@@ -203,6 +256,13 @@ Three process classes share a localhost WebSocket bus:
 paths, validation, sanitizer, atomic bearer-token, identity helpers.
 `bin/profile.py` persists the per-project display label.
 `bin/auto_start.py` rewrites the `when` field in `monitors/monitors.json`.
+`bin/doctor.py` (`/hubbub:talk doctor`) reports the data directory's
+health and exits — **read-only on purpose**. It exists because a refused
+legacy-data-dir migration is silent on both ends (the warning goes to a
+monitor output file nobody opens), and because the repair it would
+otherwise offer means discarding one of two live tokens, which ends one
+side's bus irreversibly. That is a decision for the human reading the
+output, not for a subcommand; don't add `--repair`.
 
 Wire protocol is one JSON object per WebSocket frame, dispatched on
 `op`: `hello`, `list`, `send`, `broadcast`, `rename`, `relabel`, `bye`,
@@ -211,6 +271,16 @@ Everything the server enforces (caps, rate limits, name/label rules,
 `role`/`nonce` cross-checks) lives in `server.py::_handle_*`; the
 constants it enforces against live in `shared.py`. Broadcasts are rate
 limited to 60/min per sender; `messages.log` rotates at 50 MB × 5.
+
+**Read `docs/DELIVERY.md` before proposing any reliability feature.** It
+records what the bus does and does not promise, measured against real logs
+from a seven-session machine: no silent misdelivery and no silent drop
+inside the bus, but also no offline queue, no processing ack, no liveness
+signal in `list`, and names that are held rather than owned (`session_id`
+is the stable handle). Two of the three failure modes people expect here
+do not exist, and the one that actually bit was outside this codebase.
+`docs/security/` holds SEC-001/002/003 — note SEC-003 lives as a section
+of `docs/security/README.md`, not as its own file like the other two.
 
 ## Non-obvious invariants (read before changing the affected code)
 
@@ -240,7 +310,11 @@ Don't "finish the rename" in one sweep and assume it's cosmetic.
    `truncated=` variant) and the `cont` continuation line; the other
    **sixteen are `[inter-session]` operational notices**. Note
    `_print_line` is *not* one of them — it prints whatever it is handed
-   and contains no prefix. Then update the `docs/security/SEC-001` /
+   and contains no prefix. **`client.py` is not the only emitter**:
+   `shared.py` prints two more, both data-dir migration notices (one to
+   stderr, one to the log), and the staging test below does not read that
+   file — so a step-2 commit that follows this list literally leaves them
+   behind and no test says so. Then update the `docs/security/SEC-001` /
    `SEC-002` prose;
 3. drop the legacy spelling from the policy.
 
@@ -249,8 +323,12 @@ finished, and it strands every error notice on a spelling that step 3
 then deletes from the policy — after which the agent silently stops
 recognising them.
 
-`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins all of
-this. `test_emitter_never_mixes_the_two_spellings` catches the partial
+`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins most of
+this — its `CODE` is `client.py` and nothing else, which is the blind spot
+called out in step 2 above, and the same shape of mistake as the SEC-003
+lesson further down: the guard covers the field that was already fixed,
+not the one that is still open.
+`test_emitter_never_mixes_the_two_spellings` catches the partial
 flip, and `test_emitter_has_not_moved_yet` is a deliberately backwards
 assertion that step 2 has not happened — **delete that one in the step-2
 commit and say so in the message.** Verified by doing both flips against
@@ -357,15 +435,18 @@ checking pid + cmdline + host + port. Refuses on mismatch. This is
 defense-in-depth against a coincidental localhost port squatter
 receiving the token.
 
-### Two venvs, and every entry-point re-execs into one of them
+### Two venvs, and most entry-points re-exec into one of them
 
 - `.venv` at the repo root — **dev/test only**, created by the Makefile.
 - `~/.claude/data/hubbub/venv` — the **user's runtime venv**,
   created by `/hubbub:talk install-deps`, holding websockets + psutil.
 
-The first ~10 lines of `client.py`, `send.py`, and `list.py` are a
-bootstrap that `os.execv`s the script under the *runtime* venv's
-interpreter whenever that venv exists. So `python3 bin/client.py`
+**Six** entry-points open with a byte-identical ~10-line bootstrap that
+`os.execv`s the script under the *runtime* venv's interpreter whenever that
+venv exists: `client.py`, `server.py`, `send.py`, `list.py`, `relabel.py`
+and `doctor.py`. The two that do **not** re-exec are `auto_start.py` and
+`discover.py` — `auto_start.py` is a user-invoked entry-point all the same,
+so it runs under whatever interpreter CC hands it. So `python3 bin/client.py`
 does not necessarily run under the interpreter you invoked it with —
 if you're hand-testing an edit and the runtime venv is stale, you are
 debugging the wrong dependencies. `tests/conftest.py` sets
