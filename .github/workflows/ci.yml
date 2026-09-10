@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: Full suite, both interpreters, coverage gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # The suite must not run as root: the only conditional skips are guarded on
+      # `geteuid() == 0` because they need `chmod 000` to actually deny access, and
+      # conftest turns any skip into a red build. GitHub runners are non-root, so this
+      # guards a future self-hosted runner, not ubuntu-latest.
+      - name: Refuse to run as root
+        run: |
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "::error::the suite must run as a non-root user (root bypasses DAC, so the"
+            echo "::error::permission tests skip, and a skip fails the run)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # No actions/setup-python on purpose. `.venv-system` is meant to be built from
+      # whatever `python3` the machine resolves to — that is the interpreter the shipped
+      # monitors run under. Pinning it with setup-python would test a Python nobody ships.
+      - name: Show the system interpreter
+        run: |
+          command -v python3
+          python3 -VV
+
+      # `make test` bootstraps `.venv` with uv *when uv is present*, and uv supplies its own
+      # Python rather than the system one. Without uv here, `.venv` and `.venv-system` would
+      # both resolve to the same python3 and `make test-both` would run the same interpreter
+      # twice — green, and proving half of what it claims. Installing uv is what makes the
+      # two-interpreter promise real. (CPython 3.12 vs 3.14 is not cosmetic: `Path.resolve()`
+      # raises on a symlink loop in 3.12 and silently returns the link in 3.14, which hid a
+      # real startup crash from `make test` until #19.)
+      - name: Install uv
+        run: |
+          python3 -m pip install --user --quiet uv
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # No venv caching, deliberately. The `.deps-stamp` sentinel still looks fresh when the
+      # interpreter behind it has moved, and a restored-but-stale venv reproduces exactly the
+      # failure mode CLAUDE.md documents twice: `make` re-runs a pytest whose interpreter path
+      # no longer exists and reports it as a missing system package. Rebuilding takes seconds.
+      - name: Full suite, both interpreters
+        run: make test-both
+
+      # After test-both, because `make versions` only reports — it does not build. Run before
+      # the venvs exist and it prints "(not built)" twice and proves nothing.
+      - name: Both interpreters were actually different
+        run: |
+          make versions
+          a=$(.venv/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+          b=$(.venv-system/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+          echo "venv=$a  venv-system=$b"
+          if [ "$a" = "$b" ]; then
+            echo "::error::both venvs resolved to CPython $a, so test-both just ran one"
+            echo "::error::interpreter twice. uv is missing or failed to provide its own Python;"
+            echo "::error::the suite is green but proves half of what this job claims."
+            exit 1
+          fi
+
+      - name: Coverage gate
+        run: make coverage
+
+  manifests:
+    name: Plugin manifests in lockstep
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # `.claude-plugin/plugin.json` drives installed-plugin update detection and
+      # `.claude-plugin/marketplace.json` drives the marketplace listing. They are read by
+      # different code paths, so bumping one alone ships a version half the system cannot
+      # see. CLAUDE.md states the rule; this is what enforces it.
+      - name: Versions must match
+        run: |
+          p=$(jq -r '.version' .claude-plugin/plugin.json)
+          m=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
+          echo "plugin.json=$p  marketplace.json=$m"
+          if [ "$p" != "$m" ]; then
+            echo "::error::plugin.json ($p) and marketplace.json ($m) disagree; every version bump touches both files in the same commit"
+            exit 1
+          fi

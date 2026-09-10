@@ -1,0 +1,192 @@
+name: Infrastructure Task
+description: CI, Makefile and venvs, packaging, releases, data-dir layout
+labels: ["infrastructure"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        <!-- template-version: 6 -->
+        ## Infrastructure Task
+        For CI, the Makefile and its two venvs, plugin packaging, releases, and the
+        `~/.claude/data/hubbub/` layout.
+
+        There is no container, no server to deploy and no hosted environment — this ships
+        as a Claude Code plugin and a standalone skill directory.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What infrastructure work is needed and why?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0 - Critical
+        - P1 - High
+        - P2 - Medium
+        - P3 - Low
+    validations:
+      required: true
+
+  - type: dropdown
+    id: areas
+    attributes:
+      label: Area(s) affected
+      multiple: true
+      options:
+        - CI (GitHub Actions)
+        - Makefile / .venv / .venv-system bootstrap
+        - Coverage configuration (.coveragerc, the startup hook)
+        - Plugin packaging (plugin.json, marketplace.json, monitors.json)
+        - Standalone skill layout (skills/talk/ self-containment)
+        - Runtime venv and install-deps
+        - Data directory layout and the legacy migration
+        - Release and tagging
+        - Issue templates / repo governance
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to create/modify
+      placeholder: |
+        - `.github/workflows/ci.yml`
+        - `Makefile`
+        - `.coveragerc`
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] `make test-both` green (both interpreters), and CI runs it
+        - [ ] `make coverage` still above the 80% floor
+        - [ ] `make versions` reports the interpreters you expect
+    validations:
+      required: true
+
+  - type: textarea
+    id: interpreters
+    attributes:
+      label: Interpreter impact
+      description: |
+        The suite runs CPython 3.14 under the uv-provisioned `.venv` while the shipped
+        monitors run whatever `python3` resolves to. That difference is not cosmetic —
+        `Path.resolve()` raises on a symlink loop in 3.12 and silently returns the link in
+        3.14, which hid a real startup crash from `make test` until #19. Mark N/A with a
+        reason if this change cannot vary by interpreter.
+      value: |
+        - **Behaves identically on 3.12 and 3.14?**
+        - **Verified with `make test-both`, not just `make test`?**
+        - **Does it depend on whether uv is installed?**
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback plan
+      description: |
+        How to revert if this causes problems. Note the two irreversible ones: a released
+        version bump reaches installed copies via `plugin.json`, and a data-dir change that
+        strands a live token cannot self-repair.
+      placeholder: |
+        - Revert the commit; `make clean && make test` rebuilds both venvs
+        - No data-dir change, so nothing under ~/.claude/data/hubbub/ is touched
+    validations:
+      required: true
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      value: |
+        - **Credentials:** does CI need any secret? (the suite needs none — it binds
+          ephemeral ports and uses `HUBBUB_DATA_DIR` for isolation)
+        - **Data isolation:** does anything here resolve the *default* data dir without the
+          `tmp_data_dir` fixture? A path resolver that touches the filesystem once moved the
+          developer's real `~/.claude/data/inter-session`
+        - **Network exposure:** any new port or bind host beyond loopback?
+        - **Privilege:** the suite must run as a non-root user — the only conditional skips
+          are guarded on `geteuid() == 0`, and root bypasses DAC
+    validations:
+      required: true
+
+  - type: textarea
+    id: scenarios
+    attributes:
+      label: Test scenarios (Given / When / Then)
+      description: |
+        One positive and one negative scenario per condition being changed.
+      placeholder: |
+        **Condition: [name the condition]**
+
+        Positive
+        - Given: [valid starting state]
+        - When: [action is performed]
+        - Then: [expected correct result]
+
+        Negative
+        - Given: [invalid or edge-case state]
+        - When: [action is performed]
+        - Then: [expected error / rejection message]
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: agent_reviews
+    attributes:
+      label: Required reviews (mandatory)
+      description: |
+        The gate runs its mechanical checks plus one critic, with the security lens joining by label.
+        The gate must return PASS before implementation begins.
+      options:
+        - label: "**ticket-gate** - mandatory before implementation. Mechanical checks + one critic (plus the security lens by label). Must return PASS."
+          required: true
+
+  - type: textarea
+    id: version_lockstep
+    attributes:
+      label: Version lockstep
+      description: |
+        `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` both carry a
+        `version` and are read by different code paths — plugin.json drives installed-plugin
+        update detection, marketplace.json drives the marketplace listing. Every bump touches
+        both files in the same commit. Mark N/A if no version moves.
+      value: |
+        - **Version moving from / to:**
+        - [ ] `.claude-plugin/plugin.json` updated
+        - [ ] `.claude-plugin/marketplace.json` updated in the same commit
+        N/A - no version change
+    validations:
+      required: true
+
+  - type: textarea
+    id: docs_impact
+    attributes:
+      label: Documentation impact
+      description: |
+        Which documentation does this change affect? "None" needs a reason.
+      placeholder: |
+        - **README.md (Install, Development):**
+        - **CLAUDE.md (Common commands, suite status, env var table):**
+        - **Why not, if none:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: codebase_context
+    attributes:
+      label: Codebase Context
+      description: "Auto-populated by ticket-gate. Do not edit manually."
+      placeholder: "Populated automatically when you run /gate-ticket"
+    validations:
+      required: false

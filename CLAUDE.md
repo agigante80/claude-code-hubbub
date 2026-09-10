@@ -142,6 +142,28 @@ green.** `make test-system` (#24) builds a second venv, `.venv-system`, from
 resolution, subprocess spawning, or anything else where CPython versions have
 drifted. `make versions` prints what each venv actually resolved to.
 
+### CI
+
+`.github/workflows/ci.yml` runs the bar this file describes: `make test-both`
+(both interpreters) then `make coverage`, on push to `main`, on every PR, and
+on demand. A second job checks the two plugin manifests carry the same
+`version` — the "Don't" at the bottom of this file, made enforceable.
+
+Two things in it are load-bearing rather than boilerplate:
+
+- **It installs `uv` on purpose.** Without uv the Makefile falls back to
+  `python3 -m venv` for `.venv`, both venvs resolve to the same interpreter,
+  and `make test-both` runs one interpreter twice — green, proving half of what
+  it claims. A step after `test-both` compares the two and **fails** if they
+  matched, because a silently single-interpreter run is exactly the green
+  summary that hides things.
+- **It does not cache the venvs.** A restored-but-stale venv reproduces the
+  `.deps-stamp` trap above, where `make` re-runs a `pytest` whose interpreter
+  is gone and reports it as a missing system package. Rebuilding costs seconds.
+
+The step order matters: `make versions` only *reports*, so the interpreter
+check has to run after `test-both` has built both venvs, not before.
+
 No build step, no linter configured. Runtime deps live at
 `skills/talk/requirements.txt` (websockets + psutil); dev
 deps inherit those plus pytest via `requirements-dev.txt`. Both reqs
@@ -210,10 +232,9 @@ again.
 
 ### Coverage, and the trap in measuring it
 
-`make coverage` reported **82%** (line + branch) on 2026-08-15 and fails below
-the 80% floor in `.coveragerc`. Unlike the suite, it is not re-measured every
-session — treat the figure as of that date, not as current. Thinnest:
-`discover.py` 61% and `relabel.py` 65% — both are
+`make coverage` reports **82%** (line + branch) and fails below the 80% floor in
+`.coveragerc`. Re-measured 2026-09-10 and unchanged since it was introduced on
+2026-08-15, module for module. Thinnest: `discover.py` 61% and `relabel.py` 65% — both are
 mostly error branches needing a real process tree or a live listener, and
 `discover.py` is the process-tree walk this file already flags as trap-laden,
 so that is the least comfortable number in the set.
