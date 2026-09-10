@@ -1,0 +1,223 @@
+name: Security Issue
+description: Report a security vulnerability or propose a security hardening
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        <!-- template-version: 6 -->
+        ## Security Issue
+        For responsible disclosure of an active vulnerability, consider reporting privately first.
+
+        Existing findings live in `docs/security/`: SEC-001 (unescaped label header spoofing),
+        SEC-002 (unescaped text structural chars), and SEC-003 — which is a *section* of
+        `docs/security/README.md`, not its own file like the other two.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Vulnerability description
+      description: What is the vulnerability or security gap?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: threat
+    attributes:
+      label: Threat model position
+      description: |
+        The model here is a single user on a single machine. The adversaries that matter are a
+        sibling process on the same host and a peer that controls its own strings.
+      options:
+        - Peer-controlled string reaching the notification header (SEC-001 / SEC-003 class)
+        - Peer text read as a directive by the receiving agent (SEC-002 class)
+        - Impersonation by a sibling process (role / for_session / nonce)
+        - Bearer token or server identity (pidfile, .meta companion, port squatter)
+        - Election / data-dir namespace fork (two servers, wiped identity)
+        - Resource exhaustion (caps, rate limits, log growth)
+        - Other / N/A
+    validations:
+      required: true
+
+  - type: dropdown
+    id: owasp
+    attributes:
+      label: OWASP category
+      description: Nearest OWASP Top 10 category, for cross-referencing. "Other / N/A" is common here.
+      options:
+        - A01 Broken Access Control
+        - A02 Cryptographic Failures
+        - A03 Injection
+        - A04 Insecure Design
+        - A05 Security Misconfiguration
+        - A06 Vulnerable Components
+        - A07 Authentication Failures
+        - A08 Data Integrity Failures
+        - A09 Logging/Monitoring Failures
+        - A10 SSRF
+        - Other / N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected
+    attributes:
+      label: Affected files / ops
+      description: |
+        Which modules or wire ops are vulnerable? Note `bin/<script>.py` in docs means
+        `skills/talk/bin/<script>.py`.
+      placeholder: |
+        - `skills/talk/bin/client.py::_format_msg` - notification header
+        - `skills/talk/bin/server.py::_handle_send` - op `send`
+        - `skills/talk/bin/shared.py::validate_label` - boundary reject
+    validations:
+      required: true
+
+  - type: textarea
+    id: data_handling
+    attributes:
+      label: Data exposure
+      description: |
+        No accounts and no regulated personal data here. What can actually leak is listed below.
+        Mark N/A with a reason where it does not apply.
+      value: |
+        - **messages.log (full peer text, rotating 50 MB x 5):**
+        - **The bearer token, or the nonce in clients/<pid>.session:**
+        - **Absolute paths, hostnames or session ids surfaced to a peer:**
+        - **Anything a *different* user on this machine could read:**
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - critical (token disclosure, forged sender attribution, silent misdelivery)
+        - high (exploitable with effort, or one side's bus ends irreversibly)
+        - medium (requires specific conditions, e.g. a hand-edited profile)
+        - low (theoretical, defense-in-depth)
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What must be true for this vulnerability to be considered resolved?
+      placeholder: |
+        - [ ] Vulnerability no longer exploitable
+        - [ ] Boundary reject added, and render-time neutralisation added — both, not either
+        - [ ] Regression test covers *this* field, verified to fail against the unfixed code
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Other issues blocked by or related to this security fix.
+      placeholder: "Blocks: #10"
+    validations:
+      required: false
+
+  - type: textarea
+    id: scenarios
+    attributes:
+      label: Test scenarios (Given / When / Then)
+      description: |
+        One positive and one negative scenario per condition being fixed.
+      placeholder: |
+        **Condition: [name the condition]**
+
+        Positive
+        - Given: [valid starting state]
+        - When: [action is performed]
+        - Then: [expected correct result]
+
+        Negative
+        - Given: [invalid or edge-case state]
+        - When: [action is performed]
+        - Then: [expected error / rejection message]
+    validations:
+      required: true
+
+  - type: textarea
+    id: unit_tests
+    attributes:
+      label: Unit tests
+      description: |
+        State file path, input, and expected output for each case.
+
+        The lesson from SEC-003 is about the test, not the code: that commit *did* add a
+        regression test — exercising the label path, while the newly added field was wide
+        open. When a field is added to the header, the security test has to cover *that* field.
+      placeholder: |
+        - [ ] Positive: `tests/test_shared.py` - a well-formed value is accepted unchanged
+        - [ ] Negative: `tests/test_shared.py` - `"`, `[`, `]`, `\n`, a BiDi override and a ZWJ
+              are each rejected at the boundary
+        - [ ] Negative: `tests/test_client.py` - a value that bypassed validation (older client,
+              hand-edited profile, direct `_format_msg` call) is still neutralised at render
+        - [ ] Verified each negative test fails against the unfixed code
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: agent_reviews
+    attributes:
+      label: Required reviews (mandatory)
+      description: |
+        The gate runs its mechanical checks plus one critic, with the security lens joining by label.
+        The gate must return PASS before implementation begins.
+      options:
+        - label: "**ticket-gate** - mandatory before implementation. Mechanical checks + one critic (plus the security lens by label). Must return PASS."
+          required: true
+
+  - type: textarea
+    id: remediation
+    attributes:
+      label: Remediation approach
+      description: |
+        How should this be fixed? Peer-controlled strings that reach the header are sanitized
+        twice on purpose — a boundary reject *and* a render-time neutralisation. Proposing only
+        one of the two is the mistake to expect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Test plan for the fix
+      description: How do we verify the fix works and does not regress?
+      placeholder: |
+        - [ ] Unit test at the boundary: ...
+        - [ ] Render test in `_format_msg` and `list.py`: ...
+        - [ ] Static policy check in `tests/test_reaction_policy.py`, if the guardrail is prose: ...
+        - [ ] `make test-both` green on both interpreters
+    validations:
+      required: true
+
+  - type: textarea
+    id: docs_impact
+    attributes:
+      label: Documentation impact
+      description: |
+        Which documentation does this change affect? "None" needs a reason. A reader deciding
+        whether to trust this on their machine looks at README.md, not CLAUDE.md.
+      placeholder: |
+        - **docs/security/ (new SEC-NNN, or an update to an existing one):**
+        - **README.md (Security section):**
+        - **CLAUDE.md (invariants):**
+        - **skills/talk/SKILL.md (guardrail prose, pinned by tests/test_reaction_policy.py):**
+        - **Why not, if none:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: codebase_context
+    attributes:
+      label: Codebase Context
+      description: "Auto-populated by ticket-gate. Do not edit manually."
+      placeholder: "Populated automatically when you run /gate-ticket"
+    validations:
+      required: false

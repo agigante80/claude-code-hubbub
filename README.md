@@ -511,16 +511,38 @@ real-world failures that motivated the rule.
 
 ## Development
 
-TDD throughout. Test runner: `pytest` + `pytest-asyncio`.
+TDD throughout. Test runner: `pytest` + `pytest-asyncio`. 496 tests, no
+skips — a skipped test fails the run.
 
 ```bash
+make              # list every target (the default)
 make test         # full suite — auto-bootstraps .venv on first run
-make test-fast    # skip subprocess-spawning tests
-make clean        # remove .venv
+make test-fast    # skip the 20 subprocess-spawning tests
+make test-system  # same suite under the SYSTEM python3
+make test-both    # both interpreters, sequentially — use before shipping
+make coverage     # suite under coverage; fails below the 80% floor
+make versions     # which Python each venv resolved to
+make clean        # remove both venvs
 ```
 
-The Makefile prefers `uv` if installed, falling back to `python3 -m
-venv`.
+The Makefile prefers `uv` if installed, falling back to `python3 -m venv`.
+That choice is not cosmetic: with uv, `.venv` gets **uv's own Python** (3.14)
+while the shipped monitors run whatever `python3` resolves to (typically
+3.12). So a green `make test` alone is not evidence that the shipped code is
+green — `make test-system` builds a second venv from `python3` explicitly, and
+`make test-both` runs both.
+
+Moving the checkout breaks both venvs and `make` will not notice: the console
+scripts carry absolute shebangs while the `.deps-stamp` sentinel still looks
+fresh, so `make test` reports a missing-file error that reads like a missing
+system package. `make clean && make test` is the fix.
+
+CI (`.github/workflows/ci.yml`) runs `make test-both` and `make coverage` on
+every push to `main` and every pull request, and separately checks that
+`.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` carry the
+same version.
+
+Issue templates live in `.github/ISSUE_TEMPLATE/`.
 
 ## License
 

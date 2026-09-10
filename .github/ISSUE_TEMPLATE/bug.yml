@@ -1,0 +1,235 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        <!-- template-version: 6 -->
+        ## Bug Report
+        Please provide enough detail to reproduce and assess the impact.
+
+        Before filing: `make test-both` (both interpreters). A green `make test`
+        alone is not evidence — see CLAUDE.md, "Common commands".
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: What is happening? What did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Minimal steps. Set `HUBBUB_NO_REEXEC=1` for any manual repro, or you are
+        debugging the runtime venv's dependencies rather than your edit.
+      placeholder: |
+        1. HUBBUB_NO_REEXEC=1 python3 skills/talk/bin/client.py --name a
+        2. In a second shell, `send.py` a message containing ...
+        3. Observe the notification line / the entry in messages.log
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behavior
+      description: What should happen vs what actually happens.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: areas
+    attributes:
+      label: Affected areas
+      description: Which areas does this bug affect?
+      multiple: true
+      options:
+        - client.py (monitor, reconnect, notification formatting)
+        - server.py (bus, wire protocol, registry, caps and rate limits)
+        - shared.py (paths, validation, sanitizers, identity, data-dir migration)
+        - spawn.py (server election and fd handoff)
+        - helper CLIs (send / list / relabel / discover)
+        - doctor.py
+        - auto_start.py / profile.py
+        - SKILL.md reaction policy
+        - plugin manifests / monitors.json
+        - tests / Makefile / CI
+        - docs / README
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - critical (message misdelivery, token or identity loss, forked bus)
+        - high (monitor will not connect or stay connected, no workaround)
+        - medium (degraded, workaround exists)
+        - low (cosmetic, log noise)
+    validations:
+      required: true
+
+  - type: textarea
+    id: data_handling
+    attributes:
+      label: Data handling
+      description: |
+        This project has no accounts and no regulated personal data — single user,
+        single machine, localhost only. What it does persist is listed below.
+        Answer only where the bug touches one; mark N/A with a reason otherwise.
+      value: |
+        - **messages.log (full peer text, rotating 50 MB x 5):**
+        - **clients/<pid>.session (bearer nonce, port, session_id):**
+        - **profiles/<sha256(project_root)>.json (display label):**
+        - **Absolute paths or hostnames that would reach a log or a header:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security impact
+      description: |
+        See docs/security/ (SEC-001 header spoofing, SEC-002 trailing directives,
+        SEC-003 session_id injection — SEC-003 is a section of docs/security/README.md).
+      value: |
+        - **Does this bug create a vulnerability?** yes / no
+        - **Does it let a peer-controlled string reach the notification header?**
+        - **Does it weaken the role/nonce cross-check or the server identity check?**
+        - **Details:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What must be true for this bug to be considered fixed?
+      placeholder: |
+        - [ ] Bug no longer reproducible
+        - [ ] Regression test added, and verified to fail against the unfixed code
+        - [ ] `make test-both` green on both interpreters
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Other issues that must be completed before or are blocked by this fix.
+      placeholder: "Blocked by: #28 | Blocks: #10"
+    validations:
+      required: false
+
+  - type: textarea
+    id: scenarios
+    attributes:
+      label: Test scenarios (Given / When / Then)
+      description: |
+        One positive and one negative scenario per condition being fixed. For bugs fixing
+        multiple independent conditions, repeat the block for each.
+      placeholder: |
+        **Condition: [name the condition]**
+
+        Positive
+        - Given: [valid starting state]
+        - When: [action is performed]
+        - Then: [expected correct result]
+
+        Negative
+        - Given: [invalid or edge-case state]
+        - When: [action is performed]
+        - Then: [expected error / rejection message]
+    validations:
+      required: true
+
+  - type: textarea
+    id: unit_tests
+    attributes:
+      label: Unit tests
+      description: |
+        State file path, input, and expected output for each case. A new test must be
+        verified to FAIL against the unfixed code before it is trusted — three written
+        here in one night passed against the very code they were meant to catch.
+      placeholder: |
+        - [ ] Positive: `tests/test_shared.py::TestX::test_y` - call with [valid input] -> [expected output]
+        - [ ] Negative: `tests/test_shared.py::TestX::test_z` - call with [bad input] -> raises [Error] / message contains "[text]"
+        - [ ] Verified the negative test fails against the unfixed code
+        - [ ] No skips (conftest fails the run on any skip; run as non-root)
+    validations:
+      required: true
+
+  - type: textarea
+    id: integration_tests
+    attributes:
+      label: Integration / subprocess tests
+      description: |
+        There is no UI here; the equivalent of E2E is a subprocess test that spawns a
+        real monitor or server. Mark N/A with justification for pure-unit fixes.
+      placeholder: |
+        - [ ] Positive: `tests/test_client.py` - @pytest.mark.slow, uses `tmp_data_dir` + `free_port`
+        - [ ] Negative: peer sends [malformed frame] -> monitor prints [notice] and stays connected
+        - [ ] Distinct `HUBBUB_PPID_OVERRIDE` per spawned subprocess (they share the pytest ppid)
+        - [ ] Waits use `tests/waiting.py` (`wait_for`, `read_line`) — never a bare sleep or readline
+        - [ ] `tests/waiting.coverage_env()` spliced into every new subprocess env, or the code reads 0%
+        N/A - [reason]
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: agent_reviews
+    attributes:
+      label: Required reviews (mandatory)
+      description: |
+        The gate runs its mechanical checks plus one critic, with the security lens joining by label.
+        The gate must return PASS before implementation begins.
+      options:
+        - label: "**ticket-gate** - mandatory before implementation. Mechanical checks + one critic (plus the security lens by label). Must return PASS."
+          required: true
+
+  - type: textarea
+    id: qa_security
+    attributes:
+      label: QA & Regression tests
+      description: What tests should be added to prevent this bug from recurring?
+      value: |
+        - [ ] **Regression test:** Reproduces this exact bug scenario and asserts the fix
+        - [ ] **Security test:** If a peer-controlled field is involved, the test covers *that*
+              field — SEC-003 shipped with a regression test that exercised the old field while
+              the new one was wide open
+        - [ ] **Edge cases:** Boundary conditions nearby (empty name, max-length label,
+              cap boundaries at 400 chars / 256 KB / 10 MB / 16 MB)
+        - [ ] **Coverage:** `make coverage` still above the 80% floor in `.coveragerc`
+    validations:
+      required: true
+
+  - type: textarea
+    id: docs_impact
+    attributes:
+      label: Documentation impact
+      description: |
+        Which documentation does this change affect? "None" needs a reason. A change that
+        leaves README.md describing the old behaviour is not finished work.
+      placeholder: |
+        - **README.md:**
+        - **CLAUDE.md (invariants):**
+        - **skills/talk/SKILL.md (reaction policy):**
+        - **docs/ (DELIVERY.md, security/):**
+        - **Why not, if none:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: codebase_context
+    attributes:
+      label: Codebase Context
+      description: "Auto-populated by ticket-gate. Do not edit manually."
+      placeholder: "Populated automatically when you run /gate-ticket"
+    validations:
+      required: false

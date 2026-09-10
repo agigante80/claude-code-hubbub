@@ -1,0 +1,272 @@
+name: Feature Request
+description: Propose a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        <!-- template-version: 6 -->
+        ## Feature Request
+        Please fill in all required fields. This template ensures alignment with the
+        project's invariants, security model, and testing bar before implementation begins.
+
+        Read `docs/DELIVERY.md` before proposing any reliability feature — it records what
+        the bus does and does not promise. Two of the three failure modes people expect
+        here do not exist.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What does this feature do and why is it needed?
+      placeholder: "One paragraph describing the feature and its value."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0 - Critical (blocks a release, or a live bus is losing or misdelivering messages)
+        - P1 - High (important for current milestone)
+        - P2 - Medium (should do, not blocking)
+        - P3 - Low (nice to have)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: areas
+    attributes:
+      label: Affected areas
+      description: Which areas does this touch? If 3+, consider splitting into separate tickets.
+      multiple: true
+      options:
+        - client.py (monitor, reconnect, notification formatting)
+        - server.py (bus, wire protocol, registry, caps and rate limits)
+        - shared.py (paths, validation, sanitizers, identity, data-dir migration)
+        - spawn.py (server election and fd handoff)
+        - helper CLIs (send / list / relabel / discover)
+        - doctor.py
+        - auto_start.py / profile.py
+        - SKILL.md reaction policy
+        - plugin manifests / monitors.json
+        - tests / Makefile / CI
+        - docs / README
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to create/modify
+      description: |
+        List all files. Note `bin/<script>.py` in docs means `skills/talk/bin/<script>.py`.
+      placeholder: |
+        - `skills/talk/bin/server.py` - new `op` handler
+        - `skills/talk/bin/shared.py` - the constant it validates against
+        - `tests/test_server.py` - positive and negative cases
+    validations:
+      required: false
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation details
+      description: How should this be implemented? Include code snippets if helpful.
+    validations:
+      required: false
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Invariants touched
+      description: |
+        CLAUDE.md lists the non-obvious invariants. Naming the one you touch is what stops
+        the next change re-breaking it. Mark N/A only if none apply.
+      value: |
+        - **Server election / `SO_REUSEADDR` / the election flock:**
+        - **State files keyed by the CC *ancestor* pid, not `getppid()`:**
+        - **The two-venv re-exec bootstrap (six entry-points):**
+        - **`${CLAUDE_PLUGIN_ROOT}` is not exported to Bash()/Monitor() shells:**
+        - **userConfig reaches hooks, never monitors (#28):**
+        - **The half-done `[inter-session]` prefix rename (#10):**
+        - **ASCII `name` vs Unicode `label`; routing is by name only:**
+        - **The data-dir migration is a rename *plus* a symlink:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What must be true for this feature to be considered complete?
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] `make test-both` green (both interpreters)
+        - [ ] `make coverage` still above the 80% floor
+    validations:
+      required: true
+
+  - type: textarea
+    id: data_handling
+    attributes:
+      label: Data handling
+      description: |
+        No accounts, no regulated personal data — single user, single machine, localhost.
+        Answer where this feature touches persisted state; mark N/A with a reason otherwise.
+      value: |
+        - **New field written to messages.log, and is it capped:**
+        - **New field in clients/<pid>.session, and who may read it:**
+        - **Anything reaching a profile, a log or a header that carries a real path or hostname:**
+        - **Retention: does it grow without bound, or rotate:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: |
+        The threat model is a sibling process on the same machine, plus a peer that controls
+        its own strings. See docs/security/.
+      value: |
+        - **Does any peer-controlled string reach the notification header?** If yes it needs a
+          boundary reject in `validate_*` AND a render-time neutralisation in
+          `sanitize_*_for_display` — both, and the regression test must cover *that* field
+        - **Role:** agent or control? A control connection must carry `for_session` + `nonce`
+          matching its listener's state file
+        - **Caps:** which of frame 16 MB / direct 10 MB / broadcast 256 KB / stdout 400 chars applies
+        - **Rate limiting:** broadcasts are 60/min per sender — does this add a new unlimited path?
+        - **Token / identity:** does it read or write the bearer token, the pidfile, the `.meta`
+          companion, or the election lock?
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Other issues that must be completed before this one.
+      placeholder: "Depends on: #28 (userConfig delivery decision)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: scenarios
+    attributes:
+      label: Test scenarios (Given / When / Then)
+      description: |
+        One positive and one negative scenario per condition being added. For features with
+        multiple independent conditions, repeat the block for each.
+      placeholder: |
+        **Condition: [name the condition]**
+
+        Positive
+        - Given: [valid starting state]
+        - When: [action is performed]
+        - Then: [expected correct result]
+
+        Negative
+        - Given: [invalid or edge-case state]
+        - When: [action is performed]
+        - Then: [expected error / rejection message]
+    validations:
+      required: true
+
+  - type: textarea
+    id: unit_tests
+    attributes:
+      label: Unit tests
+      description: |
+        State file path, input, and expected output for each case. Verify each negative test
+        FAILS against the unimplemented code before trusting it.
+      placeholder: |
+        - [ ] Positive: `tests/test_server.py::TestX::test_y` - [valid input] -> [expected output]
+        - [ ] Negative: `tests/test_server.py::TestX::test_z` - [bad input] -> rejected with [code]
+        - [ ] Verified the negative test fails against the unimplemented code
+        - [ ] No skips (conftest fails the run on any skip; run as non-root)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: agent_reviews
+    attributes:
+      label: Required reviews (mandatory)
+      description: |
+        The gate runs its mechanical checks plus one critic, with the security lens joining by label.
+        The gate must return PASS before implementation begins.
+      options:
+        - label: "**ticket-gate** - mandatory before implementation. Mechanical checks + one critic (plus the security lens by label). Must return PASS."
+          required: true
+
+  - type: textarea
+    id: qa_security
+    attributes:
+      label: QA & Security testing
+      description: Security and quality assurance requirements for this feature.
+      value: |
+        ### Security tests
+        - [ ] **Impersonation:** a sibling process with the same parent cannot open a `control`
+              connection for this session without the matching `for_session` + `nonce`
+        - [ ] **Header injection:** any new peer-controlled field is tested with `"`, `[`, `]`,
+              a newline, a BiDi override and a ZWJ — at the boundary *and* at render
+        - [ ] **Oversize / malformed:** empty payload, missing `op`, unknown `op`, cap+1 bytes
+        - [ ] **Rate limiting:** the 60/min broadcast limit still holds on the new path
+        - [ ] **Identity:** a port squatter with a different data dir still fails
+              `verify_server_identity` rather than receiving the token
+
+        ### QA tests
+        - [ ] **Unit tests:** pure logic in `shared.py` covered directly
+        - [ ] **Integration tests:** a real monitor and server over a `free_port`, happy + error paths
+        - [ ] **Both interpreters:** `make test-both` — the uv `.venv` is CPython 3.14 while the
+              shipped monitors run system `python3`, and that difference has hidden a real crash
+        - [ ] **Coverage:** new subprocess call sites splice `tests/waiting.coverage_env()`
+    validations:
+      required: true
+
+  - type: textarea
+    id: integration_tests
+    attributes:
+      label: Integration / subprocess test scenarios
+      description: |
+        There is no UI here; the equivalent of E2E is a subprocess test that spawns a real
+        monitor or server. Pure-`shared.py` features can mark this N/A with justification.
+      placeholder: |
+        ### Happy path
+        - [ ] Two monitors on one `free_port` exchange the new op; assert on stdout via `read_line`
+        - [ ] `messages.log` records it with the expected fields
+
+        ### Unhappy path
+        - [ ] Peer disconnects mid-frame -> sender sees [notice], bus stays up
+        - [ ] Two clients race the election -> exactly one server, both connect
+        - [ ] Name collision -> retry budget honoured (`HUBBUB_MAX_COLLISION_RETRIES=0` makes it terminal)
+        N/A - [reason]
+    validations:
+      required: true
+
+  - type: textarea
+    id: docs_impact
+    attributes:
+      label: Documentation impact
+      description: |
+        Which documentation does this change affect? "None" needs a reason. A change that
+        leaves README.md describing the old behaviour is not finished work.
+      placeholder: |
+        - **README.md:**
+        - **CLAUDE.md (invariants, env var table):**
+        - **skills/talk/SKILL.md (reaction policy):**
+        - **docs/ (DELIVERY.md, security/):**
+        - **Both plugin manifests bumped in the same commit, if versioned:**
+        - **Why not, if none:**
+    validations:
+      required: true
+
+  - type: textarea
+    id: codebase_context
+    attributes:
+      label: Codebase Context
+      description: "Auto-populated by ticket-gate. Do not edit manually."
+      placeholder: "Populated automatically when you run /gate-ticket"
+    validations:
+      required: false
