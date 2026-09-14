@@ -95,64 +95,21 @@ To run pytest with non-make flags, use the venv's pytest directly:
 .venv/bin/pytest -k "election" -v                             # by substring
 ```
 
-Two concurrent pytest sessions are **expected to pass** as of the #17 fix —
-verified by running two full suites at once, both green. Each
-session gets its own `tmp_data_dir`, so they do not contend for *state*; what
-broke them was contention for *CPU*, against subprocess tests that asserted on
-fixed `time.sleep()` durations.
+Two concurrent pytest sessions are expected to pass; the wait/deadline rules
+that keep it so are `docs/coding-standards.md` → *Tests* → *Waits and deadlines*.
 
-The rule is therefore no longer "don't run two", it is **don't assert on a
-sleep, and never read a pipe without an enforceable deadline**. A blocking
-`readline()` in a loop that checks its deadline only *between* reads cannot
-honour it — the read that never returns is exactly the one the timeout is
-for — so a dropped message hung the whole suite instead of failing it, with
-no assertion message and the enclosing `finally` never reaping the
-subprocesses.
-
-Two caveats, so this doesn't read as a guarantee it isn't:
-
-- **Port isolation is very good, not absolute.** `free_port` binds port 0 and
-  *closes* the socket before returning the number, so a concurrent session can
-  be handed the same port. On a collision one session's client probes the
-  other's server and fails `verify_server_identity` (different data dir →
-  different token and pidfile), surfacing as `server identity check failed`.
-  Rare, and it reads as a product bug when it happens.
-- **The shared waits live in `tests/waiting.py`** — `wait_for` for a
-  condition, `read_line` for a pipe read with a deadline it can actually
-  enforce. Use them; the identical bug has been found three times in this
-  suite (#17, #23, #27) and each time only the copy that failed got fixed.
-  Across `test_helpers.py` and `test_client.py` the only remaining fixed
-  `time.sleep` calls are poll intervals inside wait loops, which is what a
-  poll interval is for — none precedes an assertion.
-
-Also note the suite runs CPython 3.14 (uv-provisioned `.venv`) while the
-shipped monitors run whatever `python3` resolves to — 3.12 on this machine.
-That difference is not cosmetic: `Path.resolve()` raises `RuntimeError` on a
-symlink loop in 3.12 and silently returns the link in 3.14, which hid a real
-startup crash from `make test` until #19.
-
-The cause is in the Makefile: `make test` bootstraps `.venv` with uv when uv
-is present, and asks it for **`UV_PY` (3.14)**, which uv downloads — so `.venv`
-is never the system Python. Without uv it falls back to `python3 -m venv` and
-the two agree — so whether your suite matches production depends on whether
-you have uv installed, which is not a property anyone reasons about. The pin
-is load-bearing: an unpinned `uv venv` accepts any interpreter it finds, and
-on a fresh CI runner that is the system 3.12, which is exactly what CI's
-"both interpreters were actually different" step caught on its first two runs.
-
-So **a green `make test` is not by itself evidence that the shipped code is
-green.** `make test-system` (#24) builds a second venv, `.venv-system`, from
-`python3` explicitly and never uv, and runs the same suite there. Use
-`make test-both` before shipping, and always for changes touching path
-resolution, subprocess spawning, or anything else where CPython versions have
-drifted. `make versions` prints what each venv actually resolved to.
+`.venv` is CPython 3.14 (uv-pinned) and the shipped monitors run the system
+`python3` (3.12 here), so a green `make test` alone does not prove the shipped
+code is green: `make test-both` before shipping — the rule and the `Path.resolve()`
+incident behind it are `docs/coding-standards.md` → *Interpreters*.
 
 ### CI
 
 `.github/workflows/ci.yml` runs the bar this file describes: `make test-both`
 (both interpreters) then `make coverage`, on push to `main`, on every PR, and
 on demand. A second job checks the two plugin manifests carry the same
-`version` — the "Don't" at the bottom of this file, made enforceable.
+`version` — the manifest-lockstep rule in `docs/coding-standards.md` →
+*Releases and manifests*, made enforceable.
 
 Two things in it are load-bearing rather than boilerplate:
 
@@ -163,7 +120,7 @@ Two things in it are load-bearing rather than boilerplate:
   matched, because a silently single-interpreter run is exactly the green
   summary that hides things.
 - **It does not cache the venvs.** A restored-but-stale venv reproduces the
-  `.deps-stamp` trap above, where `make` re-runs a `pytest` whose interpreter
+  `.deps-stamp` trap (Suite status, below), where `make` re-runs a `pytest` whose interpreter
   is gone and reports it as a missing system package. Rebuilding costs seconds.
 
 The step order matters: `make versions` only *reports*, so the interpreter
@@ -186,9 +143,8 @@ by hand.
 
 Env vars are the *only* working configuration route for an auto-started
 monitor (see the userConfig invariant), so this is the whole surface. Each
-has an `INTER_SESSION_*` alias, honoured indefinitely — `shared.env()` tries
-`HUBBUB_` first and falls back, so grepping for a literal `HUBBUB_FOO` misses
-the `shared.env("FOO")` call sites.
+has an `INTER_SESSION_*` alias; how they are read (`shared.env()`) and how to
+add one is `docs/coding-standards.md` → *Environment variables*.
 
 | Var | Read by | Purpose |
 | :-- | :------ | :------ |
@@ -251,18 +207,8 @@ mostly error branches needing a real process tree or a live listener, and
 `discover.py` is the process-tree walk this file already flags as trap-laden,
 so that is the least comfortable number in the set.
 
-**Do not measure it by hand with a bare `coverage run`.** Most of the
-integration value here is subprocess tests, and their children are separate
-processes, so without `parallel = True` plus the startup hook `make coverage`
-installs into `.venv`, `auto_start.py` and `doctor.py` report **0%** — they are
-reached *only* through subprocesses — and the total reads 68% instead of 82%.
-That looks like two untested modules when they are 90% and 78%.
-
-The subprocess helpers deliberately build a *clean* env dict, which is why
-they are trustworthy and also why the hook does not reach the child. Every
-such call site therefore splices in `tests/waiting.coverage_env()`, which is
-empty outside a coverage run. **Add it to any new subprocess call site**, or
-that code will silently read as uncovered.
+How to measure it (never a bare `coverage run`) and the `coverage_env()` rule
+for subprocess call sites are `docs/coding-standards.md` → *Coverage*.
 
 ## Architecture (big picture)
 
@@ -677,55 +623,18 @@ prose so prose edits can't accidentally drop a guardrail.
 
 ## Test conventions
 
-- **State isolation**: the `tmp_data_dir` fixture sets
-  `HUBBUB_DATA_DIR` to a per-test temp path so the suite never
-  touches `~/.claude/data/hubbub/`.
-- **Free ports**: the `free_port` fixture binds port `0` to find an
-  ephemeral port.
-- **PPID override**: subprocesses spawned in a single test share the
-  pytest parent pid, which would collide on the ppid flock. Set
-  `HUBBUB_PPID_OVERRIDE` to give each subprocess a distinct
-  pseudo-ppid.
-- **Collision-retry budget**: `HUBBUB_MAX_COLLISION_RETRIES` (default 3).
-  Set it to `0` to make the first name collision terminal, which is the
-  only deterministic way to exercise retry exhaustion — otherwise you
-  need four sessions racing one cwd-derived name and the outcome depends
-  on their interleaving. Same shape and purpose as the ppid override.
-- **Waits**: `tests/waiting.py`. `wait_for(predicate)` for a condition,
-  `read_line(proc)` for a pipe read with an enforceable deadline. Never
-  a bare `time.sleep()` before an assertion, and never a bare
-  `proc.stdout.readline()` — see the concurrency note under Common
-  commands for why the latter hangs the suite rather than failing it.
-- **Slow tests** (`@pytest.mark.slow`): subprocess-spawning, >1 s.
-- **Skips fail the run.** `conftest.pytest_sessionfinish` turns any skipped
-  test into a red build, because `495 passed, 1 skipped` reads as success and
-  the test that did not run is the one nobody looks at. The only conditional
-  skips here are guarded on `os.geteuid() == 0` — they need `chmod 000` to
-  actually deny access, and root bypasses DAC — so **run the suite as a
-  non-root user**, which is what keeps the count at zero. `--allow-skips` is
-  the escape hatch when a skip is genuinely intended.
+Fixtures, waits, subprocess spawning, the slow marker and the skip policy are
+`docs/coding-standards.md` → *Tests*. Coding conventions generally (style,
+naming, imports, error handling, env vars, filesystem writes, peer strings,
+docs, releases, commits) live in that file; this one holds the invariants.
 
 ## Don't
 
-- **Don't blanket `pkill -f 'bin/(client|server).py'`** during local
-  testing — it will kill real user hubbub monitors running in
-  other CC sessions. Target specific pids via the pidfile
-  (`~/.claude/data/hubbub/server.<port>.pid`) or
-  `TaskList()`-derived monitor task IDs.
 - **Don't use `${user_config.*}` substitution in `monitors.json`** —
   see invariant above.
 - **Don't weaken the SKILL.md description** ("pushy" multi-trigger
   framing is intentional to combat undertriggering — skill-creator
   best practice).
-- **Don't add translations.** The project is English-only: one
-  `README.md`, no `README.<lang>.md`, no localized docs or skill
-  content. A Simplified Chinese README existed until 2026-08-14 and was
-  deleted — it drifted out of sync with the English one, and a stale
-  translation is worse than none. If a translation shows up in a PR or
-  a patch, drop it rather than maintaining it.
-- **Don't bump the version in only one of the two plugin manifests.**
-  `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`
-  both carry a `version` field and are consulted by different code
-  paths (plugin.json drives installed-plugin update detection;
-  marketplace.json drives the marketplace listing). They must stay
-  in sync — every version bump touches both files in the same commit.
+- The conventions that used to sit here (no blanket `pkill` of
+  `bin/(client|server).py`, English-only docs, both plugin manifests bumped
+  together) are in `docs/coding-standards.md`.
