@@ -67,10 +67,10 @@ the cap or rate limit it is subject to; impersonation (session A cannot send as 
 single generic auth test does not satisfy this: the three refusal cases are distinct.
 
 Where the change touches `shared.py` or `spawn.py`, the test names the invariant it pins and
-the regression it prevents. Tests follow `CLAUDE.md` → *Test conventions*: `tmp_data_dir`,
+the regression it prevents. Tests follow `docs/coding-standards.md` → *Tests*: `tmp_data_dir`,
 `free_port`, `HUBBUB_PPID_OVERRIDE` for sibling subprocesses, waits from `tests/waiting.py`
 (never a bare `time.sleep()` before an assertion, never a bare `readline()`), and
-`coverage_env()` spliced into every new subprocess call site.
+`coverage_env()` spliced into every new clean-env subprocess call site.
 
 ### 3. Integration / subprocess test specs
 
@@ -136,9 +136,10 @@ Judged against whichever fields the template provides (`implementation`, `depend
 `files`), not a new form field: the templates already collect this content, so this rule adds
 no section and no `template-version` bump.
 
-- File paths and implementation steps are concrete, and match the conventions and invariants
-  in `CLAUDE.md` (this project keeps its standards there; there is no separate
-  `docs/coding-standards.md`).
+- File paths and implementation steps are concrete, and match the conventions in
+  `docs/coding-standards.md` (the canonical coding standards: style, naming, imports, error
+  handling, env vars, filesystem writes, peer strings, tests, interpreters, docs, releases)
+  and the invariants in `CLAUDE.md`.
 - The build and test commands the ticket relies on are named: `make test`, `make test-both`,
   `make coverage`, or a single `.venv/bin/pytest tests/test_x.py::TestY -v`.
 - Every new dependency is justified against the standard library and the two already present
