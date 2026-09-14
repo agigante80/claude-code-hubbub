@@ -511,7 +511,7 @@ real-world failures that motivated the rule.
 
 ## Development
 
-TDD throughout. Test runner: `pytest` + `pytest-asyncio`. 496 tests, no
+TDD throughout. Test runner: `pytest` + `pytest-asyncio`. 499 tests, no
 skips — a skipped test fails the run.
 
 ```bash
@@ -556,3 +556,12 @@ keeps the two on the same `template-version`.
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+## Sponsor
+
+I build and maintain this fork in my own time. It is free, it stays free,
+and it gets maintained either way.
+
+If it saved you some time and you feel like saying thanks, you can do that
+at [github.com/sponsors/agigante80](https://github.com/sponsors/agigante80).
+Entirely optional, and nothing about the project changes either way.
