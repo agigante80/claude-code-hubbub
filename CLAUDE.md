@@ -172,7 +172,7 @@ their own session isn't on.
 
 ### Suite status
 
-Green as of 2026-09-06: `496 passed in ~69 s` on Linux 7.0 / CPython
+Green as of 2026-09-14: `499 passed in ~69 s` on Linux 7.0 / CPython
 3.12 (`make test-system`), 20 of them `@pytest.mark.slow`. The four
 tests that used to fail all start **two listeners at once**, and they
 were reporting the real server-election race — fixed in `0e33123` by

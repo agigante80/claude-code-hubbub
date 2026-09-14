@@ -35,10 +35,13 @@ duplicate, delete the copy here and link.
   where the module is a unit (`test_shared.py`, `test_server.py`,
   `test_client.py`, `test_profile.py`, `test_doctor.py`,
   `test_auto_start.py`), `test_helpers.py` for the three control CLIs
-  together, and `test_reaction_policy.py` / `test_plugin_manifest.py` for
-  prose and manifests. `spawn.py` and `discover.py` are exercised through
-  the client and helper tests rather than in isolation. Shared test helpers
-  go in `tests/waiting.py`, not copied per file.
+  together, `test_reaction_policy.py` / `test_plugin_manifest.py` for
+  prose and manifests, `test_repo_metadata.py` for the repo metadata
+  GitHub reads from `main` (`FUNDING.yml`, the README's closing section),
+  and `test_waiting.py` for the shared wait helpers themselves. `spawn.py`
+  and `discover.py` are exercised through the client and helper tests
+  rather than in isolation. Shared test helpers go in `tests/waiting.py`,
+  not copied per file.
 
 ## Formatting
 
