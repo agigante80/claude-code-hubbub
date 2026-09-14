@@ -133,6 +133,11 @@ A second workflow, `template-lockstep.yml`, runs `scripts/check-template-lockste
 ticket must contain — the templates collect it, the plugin-registered `ticket-gate`
 enforces it. Bump the marker in all five files in one commit or CI goes red.
 
+`docs/roadmap.md` owns which phases exist and their state; GitHub milestones own
+which phase each ticket is in. At most one phase is `open`. `docs/guides/labels.md`
+explains the label set the gate routes on; the area names are deliberately the
+gate's built-in ones — a custom area label fails its mechanical check.
+
 No build step, no linter configured. Runtime deps live at
 `skills/talk/requirements.txt` (websockets + psutil); dev
 deps inherit those plus pytest via `requirements-dev.txt`. Both reqs
