@@ -52,7 +52,7 @@ that N/A claim like any other.
 - exactly ONE `When` per scenario; multiple When/Then pairs mean multiple behaviours, split them
 - declarative, not step-by-step imperative
 - names a real op, script, env var, or notification prefix where the ticket makes one evident
-- the negative scenario asserts a SPECIFIC error `code`, exit status, or `[inter-session]`
+- the negative scenario asserts a SPECIFIC error `code`, exit status, or `[hubbub]`
   notice text, never "it fails"
 - not a restatement of the summary
 

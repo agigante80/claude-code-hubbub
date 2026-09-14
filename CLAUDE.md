@@ -28,7 +28,7 @@ The skill content (`skills/talk/SKILL.md`) is install-mode
 agnostic: the connect step has **no upfront dedup check**. It picks a
 name and calls `Monitor()` directly. If a monitor is already running
 for this CC session, `bin/client.py`'s ppid-flock catches the duplicate
-and the new spawn exits with `[inter-session] another monitor for this
+and the new spawn exits with `[hubbub] another monitor for this
 session is already running`, which the LLM surfaces via the Error
 notifications path. Skipping the pre-check optimizes the common case
 (not connected yet → straight spawn, ~50-100ms faster) and lets the
@@ -274,55 +274,55 @@ of `docs/security/README.md`, not as its own file like the other two.
 
 The project was `inter-session` through `0.1.4`; the plugin is now
 `hubbub` and the skill is `talk` (`/hubbub:talk`). **Identity was
-renamed, runtime identifiers were not**, and that asymmetry is
-intentional:
+renamed first, runtime identifiers one release at a time**, and that
+staging is intentional:
 
 | Renamed | Renamed, with a compatibility shim | Still `inter-session` |
 | :------ | :--------------------------------- | :-------------------- |
-| plugin + marketplace `name`, repo/docs, `skills/talk/`, `monitors.json` (`hubbub-client`, description `hubbub messages`) | `~/.claude/data/hubbub/` (`0.2.0`; legacy path left as a symlink), `HUBBUB_*` env vars (`INTER_SESSION_*` still honoured) | the `[inter-session …]` stdout prefix |
+| plugin + marketplace `name`, repo/docs, `skills/talk/`, `monitors.json` (`hubbub-client`, description `hubbub messages`), the `[hubbub …]` stdout prefix (`0.3.0`, #10) | `~/.claude/data/hubbub/` (`0.2.0`; legacy path left as a symlink), `HUBBUB_*` env vars (`INTER_SESSION_*` still honoured), the reaction policy in `SKILL.md` (accepts `[inter-session …]` as well as `[hubbub …]`) | nothing on disk or on the wire. The policy still *accepts* `[inter-session …]` from a monitor started under `0.2.x`; retiring that acceptance is #41 |
 
-The stdout prefix is the last piece, and it is deliberately still
-outstanding — see issue #10. It is the wire contract between `client.py`
-and the reaction policy in `SKILL.md`, so changing it means teaching the
-policy to accept both spellings for a release before the emitter moves.
-Don't "finish the rename" in one sweep and assume it's cosmetic.
+The stdout prefix is the wire contract between `client.py` and the
+reaction policy in `SKILL.md`, so moving it meant teaching the policy to
+accept both spellings for a release before the emitter moved. Getting
+the order wrong fails silently: a monitor emitting a spelling the policy
+does not know produces no error, the agent just stops treating peer
+messages as messages. Three steps, one per release:
 
-**Step 1 of 3 is done.** The policy now accepts `[hubbub …]` *and*
-`[inter-session …]`; the emitter is unchanged and still writes
-`[inter-session …]`. The remaining steps are one per release:
+1. **done** (d886d8c, 2026-08-15): the policy accepts `[hubbub …]` *and*
+   `[inter-session …]`; the emitter unchanged.
+2. **done** (#10, `0.3.0`): every emitted literal flipped to
+   `[hubbub …]` in one commit — 19 in `client.py` (three message headers
+   in `_format_msg`, including the `truncated=` variant, and the `cont`
+   continuation line; **sixteen `[hubbub]` operational notices**) plus
+   **two in `shared.py`**, the data-dir migration notices. `_print_line`
+   carries no prefix and was never one of them. The deliberately
+   backwards `test_emitter_has_not_moved_yet` was deleted in that commit.
+3. **open — #41**: drop the legacy spelling from the policy, in a later
+   release than `v0.3.0`, after a grace period. Until then the policy
+   lines in `SKILL.md` (the accepted-header schema, the "both spellings"
+   paragraph, the leading-header rule, the notice rule) keep both
+   spellings; only the examples say `[hubbub`. Don't fold step 3 into
+   an unrelated commit: a plugin session that loaded a pre-#41 policy is
+   fine, but a monitor started under `0.2.x` and still running emits the
+   legacy spelling, and the policy is the only thing keeping it heard.
 
-2. flip **every** prefix literal in `client.py` — that is 19 of them, not
-   3. Three are message headers in `_format_msg` (including the
-   `truncated=` variant) and the `cont` continuation line; the other
-   **sixteen are `[inter-session]` operational notices**. Note
-   `_print_line` is *not* one of them — it prints whatever it is handed
-   and contains no prefix. **`client.py` is not the only emitter**:
-   `shared.py` prints two more, both data-dir migration notices (one to
-   stderr, one to the log; two further occurrences in `shared.py` are
-   comments, which the guard skips). The mixing guard below reads both
-   files, so a step-2 commit that follows the `client.py` list literally
-   and leaves `shared.py` behind goes red with `2 old, 19 new`. Then
-   update the `docs/security/SEC-001` / `SEC-002` prose;
-3. drop the legacy spelling from the policy.
+The rule for a **new notice** is unchanged by the flip: copy an existing
+prefix literal exactly, don't spell it from a variable, and update the
+counts above.
 
-Flipping only the message headers is the mistake to expect: it looks
-finished, and it strands every error notice on a spelling that step 3
-then deletes from the policy — after which the agent silently stops
-recognising them.
-
-`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins this. Its
-`CODE` is `client.py` and its `SHARED` is `shared.py`; until `a0aec34` it
-read only the former, so the guard could not see a `shared.py` left behind
-— the same shape of mistake as the SEC-003 lesson further down, where the
-guard covered the field that was already fixed rather than the one still
-open. If a third emitter ever appears, add it to that test's sources in
-the same commit.
-`test_emitter_never_mixes_the_two_spellings` catches the partial
-flip, and `test_emitter_has_not_moved_yet` is a deliberately backwards
-assertion that step 2 has not happened — **delete that one in the step-2
-commit and say so in the message.** Verified by doing both flips against
-the suite: a partial flip fails two tests, a complete flip fails only
-the delete-me one.
+`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins the
+staging. Its `CODE` is `client.py` and its `SHARED` is `shared.py`;
+until `a0aec34` it read only the former, so the guard could not see a
+`shared.py` left behind — the same shape of mistake as the SEC-003
+lesson further down, where the guard covered the field that was already
+fixed rather than the one still open. If a third emitter ever appears,
+add it to that test's sources in the same commit.
+`test_emitter_never_mixes_the_two_spellings` fails any tree where the
+two files carry both spellings on non-comment lines (so a mention in a
+docstring counts; only whole `#` lines are skipped),
+`test_continuation_line_moves_with_the_header` compares the header and
+`cont` emitters to each other, and `test_policy_accepts_both_spellings`
+is the guard that goes red if step 3 is done early.
 
 #### The data-dir migration is a rename **plus a symlink**, and the symlink is the load-bearing half
 

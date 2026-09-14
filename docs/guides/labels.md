@@ -35,7 +35,7 @@ means *here*:
 
 | Label | Means in this codebase | Typical files |
 |---|---|---|
-| `api` | The wire protocol — ops, frame shapes, caps, rate limits, error codes — and the CLI / stdout contracts, including the `[inter-session …]` notification prefix | `server.py::_handle_*`, `send.py`, `list.py`, `relabel.py`, `doctor.py`, `client.py::_format_msg` |
+| `api` | The wire protocol — ops, frame shapes, caps, rate limits, error codes — and the CLI / stdout contracts, including the `[hubbub …]` notification prefix | `server.py::_handle_*`, `send.py`, `list.py`, `relabel.py`, `doctor.py`, `client.py::_format_msg` |
 | `backend` | The long-lived processes and their state: server lifecycle, the monitor's reconnect loop, the election, the data-dir layout and its migration | `server.py`, `client.py`, `spawn.py`, `shared.py`, `discover.py`, `profile.py` |
 | `components` | The Claude Code layer: the reaction policy, plugin manifests, `monitors.json`, auto-start, how a session joins the bus | `skills/talk/SKILL.md`, `.claude-plugin/*.json`, `monitors/monitors.json`, `auto_start.py` |
 | `tooling` | The guards, scripts and CI that enforce the rules | `Makefile`, `tests/`, `.coveragerc`, `.github/workflows/`, `scripts/` |

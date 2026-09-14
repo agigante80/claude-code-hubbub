@@ -25,7 +25,7 @@ BROADCAST_TEXT_CAP = 256 * 1024
 # delivers to the receiving LLM. Empirically (issue #2), CC clips each
 # notification at ~512 chars total, so above this budget the truncated=
 # marker and cont-pointer line never reach the LLM. 400 leaves room for
-# our prefix (`[inter-session msg=… from="…" sid=… "…" truncated=N] `)
+# our prefix (`[hubbub msg=… from="…" sid=… "…" truncated=N] `)
 # under the 512 limit in typical cases; very long name+label combos may
 # still clip, but the cont-pointer line is short and always fits, so the
 # LLM still gets the messages.log path for full content.
@@ -59,7 +59,7 @@ SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 LABEL_MAX_CP = 60
 # Structural characters of the stdout notification header
-# (`[inter-session … from="…" "<label>"]`). Forbidden in a label so a
+# (`[hubbub … from="…" "<label>"]`). Forbidden in a label so a
 # peer-controlled label can never reconstruct or corrupt that header on ANY
 # surface that reflects it — the notification line, the `list` table, and the
 # raw `from_label` written to messages.log (which the truncated-message flow
@@ -583,7 +583,7 @@ def _migration_warn(msg: str) -> None:
     otherwise reach the caller's rollback and try to move the token back into a
     directory that no longer exists."""
     try:
-        print(f"[inter-session] data-dir migration: {msg}", file=sys.stderr)
+        print(f"[hubbub] data-dir migration: {msg}", file=sys.stderr)
     except OSError:
         pass
 
@@ -612,7 +612,7 @@ def _migration_error(msg: str, hint: bool = True) -> None:
     if hint:
         sep = "" if msg.rstrip().endswith((".", "!", "?")) else "."
         msg = f"{msg.rstrip()}{sep} Run /hubbub:talk doctor to see the current state."
-    line = f"[inter-session] data-dir migration: {msg}"
+    line = f"[hubbub] data-dir migration: {msg}"
     # stderr unconditionally, so the record exists even when the escalation
     # below is dropped (an opted-out session must stay silent on stdout).
     try:

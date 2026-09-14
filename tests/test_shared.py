@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from bin import shared
+from tests import waiting
 
 SKILL_DIR = Path(__file__).resolve().parent.parent / "skills" / "talk"
 
@@ -1650,7 +1651,8 @@ class TestMigrationErrorsReachTheReporter:
         monkeypatch.setattr(shared, "_migration_reporter", seen.append)
         shared._migration_error("cannot merge X into Y")
         assert seen and "cannot merge" in seen[0]
-        assert seen[0].startswith("[inter-session]")
+        assert seen[0].startswith("[hubbub] data-dir migration:")
+        assert "Run /hubbub:talk doctor" in seen[0]
 
     def test_informational_stays_on_stderr(self, monkeypatch, capsys):
         seen = []
@@ -1691,6 +1693,66 @@ class TestDanglingNewDirIsHandled:
         assert "Not a directory" not in capsys.readouterr().err
 
 
+
+
+class TestMigrationNoticeReachesStdout:
+    """#10 step 2, for the emitter `client.py` does not own. `shared.py`'s
+    migration notices are the two literals a client.py-only flip strands on
+    the old spelling; the unit test above sees the reporter's line, but
+    nothing before this read one off a spawned monitor's stdout, where the
+    reaction policy actually meets it.
+
+    A clean env dict on purpose: `HUBBUB_DATA_DIR` set (which `tmp_data_dir`
+    would do, and which inheriting `os.environ` from a sibling test could)
+    returns from `migrate_legacy_data_dir` before any notice is emitted.
+    `HOME` is the fixture, so the real data dir is never touched.
+    """
+
+    @pytest.mark.slow
+    def test_foreign_symlink_refusal_is_the_first_line(self, tmp_path):
+        home = tmp_path / "home"
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        legacy = home / ".claude" / "data" / "inter-session"
+        legacy.parent.mkdir(parents=True)
+        legacy.symlink_to(elsewhere)
+        with __import__("socket").socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(home),
+            "HUBBUB_NO_REEXEC": "1",
+            "HUBBUB_PPID_OVERRIDE": "61001",
+            "PYTHONPATH": str(SKILL_DIR),
+            **waiting.coverage_env(),
+        }
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(SKILL_DIR / "bin" / "client.py"),
+             "--port", str(port), "--name", "x",
+             "--idle-shutdown-minutes", "1"],
+            env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            line = waiting.read_line(proc)
+            assert line.startswith("[hubbub] data-dir migration:"), f"got {line!r}"
+            assert "leaving it alone" in line, f"got {line!r}"
+            assert "Run /hubbub:talk doctor" in line, f"got {line!r}"
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            # The refusal keeps state on the symlink's target, so a server the
+            # monitor went on to elect left its pidfile under `elsewhere`.
+            pid_path = elsewhere / f"server.{port}.pid"
+            if pid_path.exists():
+                try:
+                    os.kill(int(pid_path.read_text().strip()), 9)
+                except (OSError, ValueError):
+                    pass
 
 
 class TestForeignSymlinkKeepsUsOnTheLiveToken:
