@@ -66,7 +66,9 @@ once already — see `hubbub-local-workspace.md`).
 Both `.claude/memory/` and `.claude/handoffs/` are gitignored: they hold
 working notes about the maintainer, and this repo is public. `.claude/overnight/`
 (the `working-overnight` queue, decisions and report) is ignored for the same
-reason. Three lines in `.gitignore` to change that.
+reason. Three lines in `.gitignore` to change that. `.private-journal/` is
+ignored separately: it is the journal tool's private scratch layer, not
+project memory, and is never meant to be published.
 
 ## Common commands
 
@@ -333,10 +335,11 @@ Don't "finish the rename" in one sweep and assume it's cosmetic.
    `_print_line` is *not* one of them — it prints whatever it is handed
    and contains no prefix. **`client.py` is not the only emitter**:
    `shared.py` prints two more, both data-dir migration notices (one to
-   stderr, one to the log), and the staging test below does not read that
-   file — so a step-2 commit that follows this list literally leaves them
-   behind and no test says so. Then update the `docs/security/SEC-001` /
-   `SEC-002` prose;
+   stderr, one to the log; two further occurrences in `shared.py` are
+   comments, which the guard skips). The mixing guard below reads both
+   files, so a step-2 commit that follows the `client.py` list literally
+   and leaves `shared.py` behind goes red with `2 old, 19 new`. Then
+   update the `docs/security/SEC-001` / `SEC-002` prose;
 3. drop the legacy spelling from the policy.
 
 Flipping only the message headers is the mistake to expect: it looks
@@ -344,11 +347,13 @@ finished, and it strands every error notice on a spelling that step 3
 then deletes from the policy — after which the agent silently stops
 recognising them.
 
-`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins most of
-this — its `CODE` is `client.py` and nothing else, which is the blind spot
-called out in step 2 above, and the same shape of mistake as the SEC-003
-lesson further down: the guard covers the field that was already fixed,
-not the one that is still open.
+`tests/test_reaction_policy.py::TestPrefixRenameStaging` pins this. Its
+`CODE` is `client.py` and its `SHARED` is `shared.py`; until `a0aec34` it
+read only the former, so the guard could not see a `shared.py` left behind
+— the same shape of mistake as the SEC-003 lesson further down, where the
+guard covered the field that was already fixed rather than the one still
+open. If a third emitter ever appears, add it to that test's sources in
+the same commit.
 `test_emitter_never_mixes_the_two_spellings` catches the partial
 flip, and `test_emitter_has_not_moved_yet` is a deliberately backwards
 assertion that step 2 has not happened — **delete that one in the step-2
