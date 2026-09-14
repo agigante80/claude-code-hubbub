@@ -15,6 +15,9 @@ from urllib.parse import quote
 from pathlib import Path
 
 DEFAULT_PORT = 9473
+# Every constant in this block is read by the code that enforces it;
+# `test_every_shared_constant_is_read` pins that. `MAX_HOPS`,
+# `PONG_TIMEOUT_S`, `ELECTION_BIND_RETRIES` were removed in #36 as never read.
 WS_FRAME_CAP = 16 * 1024 * 1024
 TEXT_CAP = 10 * 1024 * 1024
 BROADCAST_TEXT_CAP = 256 * 1024
@@ -32,13 +35,10 @@ BROADCAST_TEXT_CAP = 256 * 1024
 # `cont` pointer to the full text in messages.log, whereas a misattributed
 # sender has no recovery at all.
 STDOUT_CAP = 400
-MAX_HOPS = 4
 PING_INTERVAL_S = 15
-PONG_TIMEOUT_S = 30
 RECONNECT_BACKOFF_MIN_S = 0.25
 RECONNECT_BACKOFF_MAX_S = 4.0
 RECONNECT_JITTER_FRAC = 0.2
-ELECTION_BIND_RETRIES = 8
 BROADCAST_RATE_LIMIT_PER_MIN = 60
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
@@ -74,6 +74,12 @@ class Role(str, enum.Enum):
     CONTROL = "control"
 
 
+# Every member here has at least one producer in `server.py`;
+# `tests/test_shared.py::TestProtocolConstants::test_no_declared_error_code_lacks_a_producer`
+# pins that. `HOP_LIMIT` (with `MAX_HOPS`) was removed in #36: the bus writes
+# each frame straight to the resolved recipient and has never forwarded, so a
+# hop counter belongs to a relay feature that does not exist. Don't add a code
+# here ahead of the branch that emits it.
 class ErrorCode:
     INVALID_NAME = "invalid_name"
     INVALID_LABEL = "invalid_label"
@@ -84,7 +90,6 @@ class ErrorCode:
     TEXT_TOO_LONG = "text_too_long"
     UNAUTHORIZED = "unauthorized"
     RATE_LIMITED = "rate_limited"
-    HOP_LIMIT = "hop_limit"
     UNKNOWN_OP = "unknown_op"
 
 
