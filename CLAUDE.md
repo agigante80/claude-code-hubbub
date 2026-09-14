@@ -20,7 +20,7 @@ Two install modes, **both supported and tested**:
   skill is self-contained — `bin/`, `requirements.txt`, and `SKILL.md`
   all live inside `skills/talk/`, so a copy or symlink of just
   that subdirectory is a fully working skill. User invokes as
-  `/hubbub:talk …` (no plugin namespace). No `userConfig`; override
+  `/talk …` (no plugin namespace). No `userConfig`; override
   defaults via `HUBBUB_PORT` / `HUBBUB_IDLE_MINUTES` env vars if
   needed.
 
