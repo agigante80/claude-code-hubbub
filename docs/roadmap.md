@@ -32,7 +32,7 @@ state: planned
 plan: docs/plans/behaviour-under-test.md
 
 The largest untested surface is the Claude Code layer: the reaction policy is checked only as prose
-(#35), nothing drives the monitor through a real session (#34), 8 of 11 error codes never cross the
+(#35), nothing drives the monitor through a real session (#34), 9 of 10 error codes never cross the
 real CLI path (#33), and two server concurrency paths were named but never probed (#30). All four
 gated BLOCKED or NEEDS-WORK on the same open question — what harness, at what cost, gating or
 reporting — so they are planned together and the plan answers it once.
