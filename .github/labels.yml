@@ -1,0 +1,66 @@
+# Label taxonomy. The ONE declaration; docs/guides/labels.md explains what each means here.
+# Apply with forge-kit's sync-labels.sh (never by hand): it creates missing labels, updates
+# drifted ones, and never deletes — GitHub's stock defaults (duplicate, help wanted, invalid,
+# question, wontfix) stay untouched.
+#
+# The five area labels are drawn from ticket-gate's built-in set on purpose: the gate's
+# mechanical check (check-ticket-mechanics.sh, check 2) tests against that set and is not
+# handed a project-specific one, so an area label named `client` or `protocol` would pass
+# Step 0b and fail check 2 on every ticket. What each built-in name means for THIS codebase
+# is in docs/guides/labels.md.
+
+# --- type ---------------------------------------------------------------------------------
+- name: bug
+  color: "d73a4a"
+  description: Something isn't working
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or request
+- name: security
+  color: "e4e669"
+  description: Security vulnerability or hardening; adds the security lens to the gate
+- name: infrastructure
+  color: "c5def5"
+  description: Makefile, venvs, CI, plugin packaging
+- name: documentation
+  color: "0e8a16"
+  description: Documentation updates or additions
+- name: testing
+  color: "fbca04"
+  description: Tests, coverage, the test harness
+
+# --- area (at least one per work ticket; routes the gate) ---------------------------------
+- name: api
+  color: "bfd4f2"
+  description: The wire protocol (ops, frames, caps, error codes) and CLI/stdout contracts
+- name: backend
+  color: "d4c5f9"
+  description: The long-lived processes — server, monitor, election, state files
+- name: components
+  color: "e0d3f5"
+  description: The Claude Code layer — SKILL.md reaction policy, plugin manifests, monitors.json
+- name: tooling
+  color: "fef2c0"
+  description: The guards, scripts and CI that enforce the rules
+- name: governance
+  color: "c2e0c6"
+  description: Templates, labels, ticket standards, the roadmap and the docs that carry them
+
+# --- priority -----------------------------------------------------------------------------
+- name: P0
+  color: "b60205"
+  description: Critical — blocks a release, or a live bus is losing or misdelivering messages
+- name: P1
+  color: "d93f0b"
+  description: High — important for the current milestone
+- name: P2
+  color: "fbca04"
+  description: Medium — should do, not blocking
+- name: P3
+  color: "c5def5"
+  description: Low — nice to have
+
+# --- special ------------------------------------------------------------------------------
+- name: critical
+  color: "b60205"
+  description: Adds the security lens and puts the critic in maximum scrutiny
