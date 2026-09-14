@@ -28,8 +28,8 @@ This project was called `inter-session` up to and including `0.1.3`. The
 plugin is now **`hubbub`** and its skill is **`talk`**, so the command is
 `/hubbub:talk` rather than `/inter-session:inter-session`.
 
-The runtime followed in `0.2.0`, but carefully, because a hard cutover
-would split the bus in half:
+The runtime followed in `0.2.0` and `0.3.0`, but carefully, because a
+hard cutover would split the bus in half:
 
 - **State lives in `~/.claude/data/hubbub/`.** On first run the old
   directory is moved there and **`~/.claude/data/inter-session` is left
@@ -41,11 +41,13 @@ would split the bus in half:
 - **Environment overrides are `HUBBUB_PORT` / `HUBBUB_IDLE_MINUTES`**,
   and the pre-rename `INTER_SESSION_*` spellings are still honoured, so
   an old export in your shell profile keeps working.
-- **Notification lines still start with `[inter-session …]`.** That one
-  is genuinely unfinished: the prefix is the contract between the monitor
-  and the skill's reaction policy, so it needs a release that accepts
-  both spellings before the emitter can move. Tracked in
-  [#10](https://github.com/agigante80/claude-code-hubbub/issues/10).
+- **Notification lines moved to `[hubbub …]` in `0.3.0`**
+  ([#10](https://github.com/agigante80/claude-code-hubbub/issues/10)).
+  The prefix is the contract between the monitor and the skill's
+  reaction policy, so the policy learned both spellings before the
+  emitter moved and still accepts the old one until
+  [#41](https://github.com/agigante80/claude-code-hubbub/issues/41):
+  a monitor started under `0.2.x` keeps working across the upgrade.
 
 ### Upgrading from `inter-session`
 
@@ -244,7 +246,7 @@ send the bug you found to payments session and ask it to fix it.
 
 **Session B** receives a notification, fixes the bug, and replies:
 ```
-[inter-session msg=q7r8 from="auth-refactor" sid=3f9c1a02] null deref in checkout.py:42 — user.email is unchecked; please add a guard and verify with the existing tests
+[hubbub msg=q7r8 from="auth-refactor" sid=3f9c1a02] null deref in checkout.py:42 — user.email is unchecked; please add a guard and verify with the existing tests
 → Edits checkout.py to add the null guard
 → Runs pytest — 47 tests pass
 → Bash: send.py --to auth-refactor --text 'done: guarded user.email at checkout.py:42; 47 tests pass'
@@ -252,7 +254,7 @@ send the bug you found to payments session and ask it to fix it.
 
 **Session A** sees:
 ```
-[inter-session msg=k2m9 from="payments-debug" sid=8c2d61ff] done: guarded user.email at checkout.py:42; 47 tests pass
+[hubbub msg=k2m9 from="payments-debug" sid=8c2d61ff] done: guarded user.email at checkout.py:42; 47 tests pass
 ```
 
 The receiving agent applies guardrails before acting (see the

@@ -112,6 +112,12 @@ class TestPrefixRenameStaging:
 
     These tests pin that staging. Together they make step 2 a one-line change
     that cannot be done out of order without a red suite.
+
+    Step 2 landed (#10): the emitter now writes `[hubbub …]`, and the
+    deliberately backwards `test_emitter_has_not_moved_yet` was deleted in
+    that commit, as its docstring asked. What remains here guards step 3
+    (#41): the policy must keep both spellings until that ticket drops the
+    legacy one, and the emitter must never carry a mix.
     """
 
     CODE = (REPO / "skills" / "talk" / "bin" / "client.py").read_text()
@@ -133,24 +139,6 @@ class TestPrefixRenameStaging:
             "is step 3, and doing it early breaks every running monitor"
         )
         assert "both spellings" in low
-
-    def test_emitter_has_not_moved_yet(self):
-        """Step 2 guard, and the reason this test looks backwards.
-
-        If someone flips the emitter in the same release that taught the
-        policy, there is no version in which a 0.2.x monitor and a newer
-        policy can coexist — which is the entire point of staging. When step 2
-        is genuinely being done, delete this test in that commit and say so in
-        the message.
-
-        Anchored on `[hubbub msg=` rather than on the presence of the old
-        spelling. The first version of this test asserted `"[inter-session" in
-        CODE`, which cannot fail: 16 of the 19 literals in `client.py` are
-        `[inter-session]` operational notices, so they satisfied the check
-        even with every message header flipped.
-        """
-        assert "[hubbub msg=" not in self.CODE
-        assert "[inter-session msg=" in self.CODE
 
     def test_emitter_never_mixes_the_two_spellings(self):
         """The failure step 2 is actually likely to produce.

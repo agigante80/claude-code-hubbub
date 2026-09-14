@@ -199,14 +199,14 @@ disagrees with a line can see what it was weighed against.
 - **`client.py`'s stdout is the notification channel** that Claude Code
   turns into agent notifications. Every line it writes goes through
   `_print_line()` (write + flush) and begins with the literal
-  `[inter-session …]` prefix: `[inter-session msg=…]` headers for messages,
-  `[inter-session]` for operational notices. That prefix is the contract with
-  the reaction policy in `SKILL.md`; the count of literals is pinned by
+  `[hubbub …]` prefix: `[hubbub msg=…]` headers for messages, `[hubbub]`
+  for operational notices. That prefix is the contract with the reaction
+  policy in `SKILL.md`; the emitter's spelling is pinned by
   `tests/test_reaction_policy.py::TestPrefixRenameStaging`. A new notice
   copies an existing prefix literal exactly, and the count in `CLAUDE.md` →
   *The rename is deliberately half-done* is updated. Don't spell the prefix
-  from a variable, and don't move it to `[hubbub …]` on your own — the flip
-  is a three-step release plan documented there.
+  from a variable, and don't drop the legacy `[inter-session …]` spelling
+  from the policy on your own — that is step 3 of the rename, #41.
 - Anything that is not a notification (`logging`, debugging, progress) goes
   to **stderr** or the `hubbub.<module>` logger. Nothing else may write to
   the monitor's stdout.
@@ -396,8 +396,10 @@ enclosing `finally` never reaping the subprocesses.
 
 - A regression test's docstring names the invariant it pins and the failure
   it prevents, with the fork/issue number. When a guard is a *deliberately
-  backwards* assertion (e.g. `test_emitter_has_not_moved_yet`), the
-  docstring says which commit is expected to delete it.
+  backwards* assertion, the docstring says which commit is expected to
+  delete it — `test_emitter_has_not_moved_yet` asserted that the prefix
+  rename's step 2 had *not* happened, and the step-2 commit (#10) deleted
+  it and said so in its message.
 - Prose that carries behaviour (`SKILL.md`'s reaction policy) is pinned by
   static tests in `tests/test_reaction_policy.py`; a guardrail added to the
   prose gets a check there, or an edit can drop it unnoticed.
@@ -503,9 +505,11 @@ code will silently read as uncovered.
   `tests/test_plugin_manifest.py::test_version_matches_marketplace` and a
   CI job both enforce it.
 - The `[inter-session …]` → `[hubbub …]` rename is a per-release, three-step
-  plan; step 2 is a single commit that flips every literal in `client.py`
-  *and* `shared.py` and deletes `test_emitter_has_not_moved_yet`. Don't do
-  part of it. The plan is `CLAUDE.md` → *The rename is deliberately
+  plan. Steps 1 and 2 are done: the policy accepts both spellings, and the
+  emitter (every literal in `client.py` *and* `shared.py`, one commit, #10)
+  writes `[hubbub …]`. Step 3 — dropping the legacy spelling from the
+  policy — is #41 and lands in a later release than `v0.3.0`. Don't fold it
+  into anything else. The plan is `CLAUDE.md` → *The rename is deliberately
   half-done*.
 
 ## Commits
