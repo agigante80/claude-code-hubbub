@@ -109,18 +109,20 @@ def _format_msg(msg: dict) -> str:
     # why that budget is tight). Judged worth it: a truncated body has a
     # `cont` pointer to the full text, a misattributed sender has nothing.
     sid_part = f" sid={from_sid}" if from_sid else ""
+    # was "[inter-session …]" through 0.2.x (step 2 of #10). Step 3, #41,
+    # drops the legacy spelling from the reaction policy.
     if was_truncated:
-        prefix = (f'[inter-session msg={msg_id} from="{from_name}"{sid_part}'
+        prefix = (f'[hubbub msg={msg_id} from="{from_name}"{sid_part}'
                   f'{label_part} truncated={full_len}]')
     else:
-        prefix = (f'[inter-session msg={msg_id} from="{from_name}"{sid_part}'
+        prefix = (f'[hubbub msg={msg_id} from="{from_name}"{sid_part}'
                   f'{label_part}]')
     return f"{prefix} {truncated}"
 
 
 def _format_truncation_pointer(msg_id: str, full_len: int) -> str:
     log_path = shared.messages_log_path()
-    return f"[inter-session msg={msg_id} cont] full text {full_len} bytes at {log_path}"
+    return f"[hubbub msg={msg_id} cont] full text {full_len} bytes at {log_path}"
 
 
 def _write_session_state(ppid: int, state: dict) -> None:
@@ -276,7 +278,7 @@ class Client:
                 # connected, which is what the user wanted. Only worth a
                 # notification when they asked for the connection themselves.
                 _print_unless_auto(
-                    "[inter-session] another monitor for this session is already running "
+                    "[hubbub] another monitor for this session is already running "
                     f"— name={info.get('name', '')!r}, "
                     f"listener_pid={info.get('listener_pid', '')}, "
                     f"session_id={info.get('session_id', '')}; exiting",
@@ -284,7 +286,7 @@ class Client:
                 )
             else:
                 _print_unless_auto(
-                    "[inter-session] another monitor for this session is already "
+                    "[hubbub] another monitor for this session is already "
                     "running — exiting", self.from_monitor)
             return 0
 
@@ -309,7 +311,7 @@ class Client:
                         log.info("connect failed: %s", e)
                 except websockets.InvalidHandshake as e:
                     _print_line(
-                        f"[inter-session] connected to a non-inter-session "
+                        f"[hubbub] connected to a non-hubbub "
                         f"service on port {self.port}: {e}")
                     return 1
                 except websockets.ConnectionClosed:
@@ -343,7 +345,7 @@ class Client:
             # each reporting a genuinely squatted port beats no session
             # reporting it at all.
             _print_line(
-                "[inter-session] server identity check failed "
+                "[hubbub] server identity check failed "
                 f"(port {self.port} is held by something that isn't bin/server.py); "
                 "refusing to connect"
             )
@@ -395,7 +397,7 @@ class Client:
                         self._tried_names.add(new_name)
                         self._collision_retries += 1
                         _print_unless_auto(
-                            f"[inter-session] name {old_name!r} taken; "
+                            f"[hubbub] name {old_name!r} taken; "
                             f"using {new_name!r}",
                             self.from_monitor,
                         )
@@ -409,7 +411,7 @@ class Client:
                     # quietly missing from `list` with nothing to explain it.
                     # SKILL.md documents a user-facing reaction to this line.
                     _print_line(
-                        f"[inter-session] name {self.name!r} taken after "
+                        f"[hubbub] name {self.name!r} taken after "
                         f"{self._collision_retries} retries; "
                         f"run /hubbub:talk connect <other-name>"
                     )
@@ -418,13 +420,13 @@ class Client:
                 # `unauthorized` here is the documented symptom of a forked
                 # token namespace, which is a fault, not housekeeping.
                 _print_line(
-                    f"[inter-session] hello rejected: {code} "
+                    f"[hubbub] hello rejected: {code} "
                     f"{welcome.get('message', '')}")
                 self._stop.set()
                 return
             if welcome.get("op") != "welcome":
                 _print_line(
-                    f"[inter-session] unexpected hello response: {welcome}")
+                    f"[hubbub] unexpected hello response: {welcome}")
                 return
 
             # Budget is per-collision-episode, not per-process. The monitor now
@@ -463,12 +465,12 @@ class Client:
                             _print_line(_format_truncation_pointer(payload.get("msg_id", ""), full_len))
                     elif op in ("peer_joined", "peer_left", "renamed", "relabeled"):
                         if self.verbose:
-                            _print_line(f"[inter-session] {op}: {payload}")
+                            _print_line(f"[hubbub] {op}: {payload}")
                     elif op == "pong":
                         pass
                     else:
                         if self.verbose:
-                            _print_line(f"[inter-session] {op}: {payload}")
+                            _print_line(f"[hubbub] {op}: {payload}")
             finally:
                 ping_task.cancel()
 
@@ -654,10 +656,10 @@ def main() -> int:
             # half-finished install-deps (websockets built, psutil didn't)
             # would otherwise show up only as a monitor that exits instantly
             # in every session, with nothing saying why.
-            print(f"[inter-session] dependencies missing — run "
+            print(f"[hubbub] dependencies missing — run "
                   f"/hubbub:talk install-deps ({_MISSING_DEP})", file=sys.stderr)
             return 0
-        _print_line(f"[inter-session] dependencies missing — run /hubbub:talk install-deps ({_MISSING_DEP})")
+        _print_line(f"[hubbub] dependencies missing — run /hubbub:talk install-deps ({_MISSING_DEP})")
         return 0
 
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
@@ -665,13 +667,13 @@ def main() -> int:
                         stream=sys.stderr)
 
     if args.name and not shared.validate_name(args.name):
-        _print_line(f"[inter-session] invalid name {args.name!r}")
+        _print_line(f"[hubbub] invalid name {args.name!r}")
         return 1
 
     try:
         final_label = _resolve_label(args.label, shared.env("LABEL"))
     except ValueError as e:
-        _print_line(f"[inter-session] invalid label {e.args[0]!r}")
+        _print_line(f"[hubbub] invalid label {e.args[0]!r}")
         return 1
 
     # Plugin auto-start path: monitors.json doesn't pass --name (so the user
@@ -684,7 +686,7 @@ def main() -> int:
         if final_name:
             auto_named = True
             _print_unless_auto(
-                f"[inter-session] no --name given; auto-named {final_name!r} "
+                f"[hubbub] no --name given; auto-named {final_name!r} "
                 f"from cwd (rename with /hubbub:talk rename)",
                 args.from_monitor,
             )
@@ -716,7 +718,7 @@ def main() -> int:
     try:
         return loop.run_until_complete(client.run())
     except ImportError as e:
-        _print_line(f"[inter-session] dependencies missing — run /hubbub:talk install-deps ({e})")
+        _print_line(f"[hubbub] dependencies missing — run /hubbub:talk install-deps ({e})")
         return 0
     finally:
         loop.close()

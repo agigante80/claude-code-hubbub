@@ -130,6 +130,8 @@ class TestSendHelper:
             # sleeps around it were the fork #23 shape — the registration
             # waits above are the real precondition.
             output = waiting.read_line(listener_b)
+            assert output.startswith("[hubbub msg="), f"got {output!r}"
+            assert "sid=" in output, f"got {output!r}"
             assert "hi from alpha" in output, f"got {output!r}"
             # `from` should be alpha (the listener for ppid_a), not the control's session_id
             assert 'from="alpha"' in output
@@ -183,6 +185,7 @@ class TestSendHelper:
             # not: readline() blocks until a line arrives or the pipe closes,
             # so a dropped broadcast hung the suite (fork #27).
             line_b = waiting.read_line(listener_b)
+            assert line_b.startswith("[hubbub msg="), f"got {line_b!r}"
             assert "hello everyone" in line_b, f"got {line_b!r}"
             assert 'from="alpha"' in line_b
         finally:
