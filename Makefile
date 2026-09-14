@@ -10,6 +10,13 @@ RUNTIME_REQS := skills/talk/requirements.txt
 SYS_VENV := .venv-system
 SYS_PYTEST := $(SYS_VENV)/bin/pytest
 
+# The CPython uv provisions for $(VENV). Pinned on purpose: `uv venv` with no version
+# accepts ANY interpreter it can find, and on a machine (or CI runner) with no managed
+# Python downloaded that is the system python3 — so both venvs silently resolve to the
+# same interpreter and `test-both` runs one of them twice. The two-interpreter promise
+# only holds because this asks uv for a version the system does not ship.
+UV_PY ?= 3.14
+
 # Sentinel file marks "deps are up-to-date with the reqs files". `make`
 # rebuilds it whenever either reqs file is newer (or it's missing), so
 # pulling new deps just means re-running `make test`.
@@ -37,8 +44,8 @@ help:
 	@echo "  make versions     Show which interpreter each venv resolves to."
 	@echo "  make clean        Remove both venvs."
 	@echo ""
-	@echo "Why test-system exists: with uv installed, $(VENV) gets uv's Python,"
-	@echo "which is not necessarily the python3 that runs the shipped monitors."
+	@echo "Why test-system exists: with uv installed, $(VENV) gets CPython $(UV_PY),"
+	@echo "which is not the python3 that runs the shipped monitors."
 	@echo "A green 'make test' alone does not prove the shipped code is green."
 
 test: $(DEPS_STAMP)
@@ -96,7 +103,7 @@ clean:
 $(DEPS_STAMP): $(DEV_REQS) $(RUNTIME_REQS)
 	@if command -v uv >/dev/null 2>&1; then \
 		echo "Bootstrapping $(VENV) with uv..."; \
-		uv venv $(VENV); \
+		uv venv --python $(UV_PY) $(VENV); \
 		uv pip install -p $(VENV) -r $(DEV_REQS); \
 	else \
 		echo "Bootstrapping $(VENV) with python3 -m venv (uv not found)..."; \
