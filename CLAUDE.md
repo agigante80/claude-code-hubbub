@@ -166,6 +166,13 @@ Two things in it are load-bearing rather than boilerplate:
 The step order matters: `make versions` only *reports*, so the interpreter
 check has to run after `test-both` has built both venvs, not before.
 
+A second workflow, `template-lockstep.yml`, runs `scripts/check-template-lockstep.sh`
+(copied verbatim from forge-kit, with its self-test): every versioned issue template in
+`.github/ISSUE_TEMPLATE/` and `docs/guides/ticket-standards.md` must carry the same
+`template-version` marker. That doc is the single source of truth for what a ready
+ticket must contain — the templates collect it, the plugin-registered `ticket-gate`
+enforces it. Bump the marker in all five files in one commit or CI goes red.
+
 No build step, no linter configured. Runtime deps live at
 `skills/talk/requirements.txt` (websockets + psutil); dev
 deps inherit those plus pytest via `requirements-dev.txt`. Both reqs

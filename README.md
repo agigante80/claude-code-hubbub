@@ -542,7 +542,9 @@ every push to `main` and every pull request, and separately checks that
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` carry the
 same version.
 
-Issue templates live in `.github/ISSUE_TEMPLATE/`.
+Issue templates live in `.github/ISSUE_TEMPLATE/`; the rules they collect are in
+`docs/guides/ticket-standards.md`, and `scripts/check-template-lockstep.sh` (run in CI)
+keeps the two on the same `template-version`.
 
 ## License
 

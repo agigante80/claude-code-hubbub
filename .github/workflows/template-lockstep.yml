@@ -1,0 +1,14 @@
+# Every versioned issue template and docs/guides/ticket-standards.md must carry the same
+# template-version marker. ticket-gate reads that version and compares every ticket against
+# it, so a template that drifts makes the gate mis-fire across ticket types, and a standards
+# doc that drifts describes rules the forms no longer implement. Guard copied verbatim from
+# forge-kit (scripts/check-template-lockstep.sh); its self-test runs alongside it.
+name: Template lockstep
+on: [push, pull_request]
+jobs:
+  lockstep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-template-lockstep.sh
+      - run: bash scripts/test-template-lockstep.sh
