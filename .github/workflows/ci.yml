@@ -42,11 +42,13 @@ jobs:
           command -v python3
           python3 -VV
 
-      # `make test` bootstraps `.venv` with uv *when uv is present*, and uv supplies its own
-      # Python rather than the system one. Without uv here, `.venv` and `.venv-system` would
-      # both resolve to the same python3 and `make test-both` would run the same interpreter
-      # twice — green, and proving half of what it claims. Installing uv is what makes the
-      # two-interpreter promise real. (CPython 3.12 vs 3.14 is not cosmetic: `Path.resolve()`
+      # `make test` bootstraps `.venv` with uv *when uv is present*, asking it for the pinned
+      # CPython (`UV_PY` in the Makefile), which uv downloads. Without uv here, `.venv` and
+      # `.venv-system` would both resolve to the same python3 and `make test-both` would run
+      # the same interpreter twice — green, and proving half of what it claims. Installing uv
+      # is what makes the two-interpreter promise real. (The pin matters as much as uv: the
+      # first two CI runs failed the check below because an unpinned `uv venv` took the
+      # runner's system 3.12.) (CPython 3.12 vs 3.14 is not cosmetic: `Path.resolve()`
       # raises on a symlink loop in 3.12 and silently returns the link in 3.14, which hid a
       # real startup crash from `make test` until #19.)
       - name: Install uv

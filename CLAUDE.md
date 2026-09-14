@@ -132,10 +132,13 @@ symlink loop in 3.12 and silently returns the link in 3.14, which hid a real
 startup crash from `make test` until #19.
 
 The cause is in the Makefile: `make test` bootstraps `.venv` with uv when uv
-is present, and **uv supplies its own Python** rather than the system one.
-Without uv it falls back to `python3 -m venv` and the two agree — so whether
-your suite matches production depends on whether you have uv installed, which
-is not a property anyone reasons about.
+is present, and asks it for **`UV_PY` (3.14)**, which uv downloads — so `.venv`
+is never the system Python. Without uv it falls back to `python3 -m venv` and
+the two agree — so whether your suite matches production depends on whether
+you have uv installed, which is not a property anyone reasons about. The pin
+is load-bearing: an unpinned `uv venv` accepts any interpreter it finds, and
+on a fresh CI runner that is the system 3.12, which is exactly what CI's
+"both interpreters were actually different" step caught on its first two runs.
 
 So **a green `make test` is not by itself evidence that the shipped code is
 green.** `make test-system` (#24) builds a second venv, `.venv-system`, from
