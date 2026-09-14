@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import re
 import stat
 import time
 import subprocess
@@ -286,11 +287,65 @@ class TestProtocolConstants:
             shared.ErrorCode.TEXT_TOO_LONG,
             shared.ErrorCode.UNAUTHORIZED,
             shared.ErrorCode.RATE_LIMITED,
-            shared.ErrorCode.HOP_LIMIT,
             shared.ErrorCode.UNKNOWN_OP,
         }
         assert all(isinstance(c, str) for c in codes)
-        assert len(codes) == 11
+        assert len(codes) == 10
+
+    def test_no_declared_error_code_lacks_a_producer(self):
+        """Every ErrorCode member has at least one producer in server.py.
+
+        Pins the mirror image of the coding-standards rule that a code is
+        added to ErrorCode before it is emitted: no member may sit in the
+        class with nothing emitting it. HOP_LIMIT did exactly that from the
+        first release until #36, documenting a hop limit the bus never
+        enforced. The scan counts every ``ErrorCode.<NAME>`` token in
+        server.py, comments included, so a member named only in a comment
+        passes; accepted cost.
+        """
+        declared = {n for n in vars(shared.ErrorCode) if n.isupper()}
+        server_src = (SKILL_DIR / "bin" / "server.py").read_text()
+        produced = set(re.findall(r"ErrorCode\.([A-Z_]+)", server_src))
+        assert "UNKNOWN_OP" in produced, "producer scan found nothing; regex is stale"
+        orphans = declared - produced
+        assert not orphans, (
+            f"declared ErrorCode members with no server.py producer: {sorted(orphans)}"
+        )
+
+    def test_every_shared_constant_is_read(self):
+        """Every public module-level constant in shared.py is read somewhere in skills/talk/bin/.
+
+        Pins the Naming rule "server.py enforces; shared.py owns the number":
+        a limit nothing reads documents a guarantee the bus does not make.
+        MAX_HOPS, PONG_TIMEOUT_S and ELECTION_BIND_RETRIES were that from the
+        first release until #36. Reads inside shared.py itself count
+        (ANSI_RE, LABEL_MAX_CP, LABEL_FORBIDDEN_CHARS and NAME_MAX_LEN are
+        read only there); a comment mention counts as a read, accepted cost.
+        A constant read only by tests/ fails this guard on purpose: tests
+        exercise a number, they do not enforce it.
+        """
+        bin_dir = SKILL_DIR / "bin"
+        shared_src = (bin_dir / "shared.py").read_text()
+        decl_re = re.compile(r"^([A-Z][A-Z0-9_]+)\s*=", re.M)
+        consts = set(decl_re.findall(shared_src))
+        assert "STDOUT_CAP" in consts, "constant scan found nothing; regex is stale"
+
+        sources = [p.read_text() for p in sorted(bin_dir.glob("*.py"))]
+        unread = set()
+        for name in consts:
+            name_re = re.compile(rf"\b{name}\b")
+            reads = 0
+            for src in sources:
+                for line in src.splitlines():
+                    if decl_re.match(line) and decl_re.match(line).group(1) == name:
+                        continue  # the declaration itself is not a read
+                    reads += len(name_re.findall(line))
+            if reads == 0:
+                unread.add(name)
+        assert "STDOUT_CAP" not in unread
+        assert not unread, (
+            f"shared.py constants read by nothing in skills/talk/bin/: {sorted(unread)}"
+        )
 
 
 class TestPaths:
