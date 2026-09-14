@@ -39,3 +39,6 @@ Thumbs.db
 .claude/memory/
 .claude/handoffs/
 .claude/overnight/
+
+# Private journal (local thinking notes, never committed)
+.private-journal/
