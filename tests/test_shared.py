@@ -2013,6 +2013,55 @@ class TestShortSessionIdIsAPrefix:
         assert shared.short_session_id(None) == ""
         assert shared.short_session_id(12345) == ""
 
+    def test_name_shaped_match_keeps_short_names_whole(self):
+        """`send.py` runs the `matches:` list of an `ambiguous` refusal through
+        this function, and that list holds **names**, not session ids
+        (`server.py:528-531`). A name of 8 characters or fewer survives."""
+        assert shared.short_session_id("alpha-1") == "alpha-1"
+
+    def test_name_shaped_match_is_clipped_at_eight(self):
+        """…and a longer one does not, which is a real defect in the
+        `AMBIGUOUS` output: `alpha-one` is suggested to the user as
+        `alpha-on`, a name that addresses nothing.
+
+        Pinned rather than fixed here (#33 filed it): the fix belongs with the
+        call site in `send.py`, which needs a name-shaped sanitizer rather than
+        the session-id fingerprint, and this test is the one the follow-up
+        flips. Nothing else depends on the clipping — `alpha-1`/`alpha-2` in
+        `tests/test_error_codes.py` are deliberately short enough to survive
+        it, so that test pins the message and this one pins the bug."""
+        assert shared.short_session_id("alpha-one") == "alpha-on"
+
+
+class TestErrorCodeMatrix:
+    """Every `ErrorCode` has a test that says which path produced it.
+
+    `docs/plans/behaviour-under-test.md` (Tier A) accepts the CLI/raw-frame
+    hybrid on exactly one condition: a code reached only by a raw frame is
+    never described as going through the CLI. That condition is prose until
+    something checks it, and the failure mode it guards against is silent —
+    a code loses its end-to-end test, or keeps it under a name that no longer
+    says how it got there, and the matrix still reads as complete.
+
+    The suffix is **terminal**, which is why every name ends in it
+    (`test_rate_limited_after_sixty_raw_broadcasts_via_cli`, not
+    `…_via_cli_after_sixty`).
+    """
+
+    TESTS_DIR = Path(__file__).resolve().parent
+
+    def _sources(self) -> str:
+        return "\n".join(p.read_text() for p in sorted(self.TESTS_DIR.glob("test_*.py")))
+
+    @pytest.mark.parametrize("code", sorted(
+        v for k, v in vars(shared.ErrorCode).items() if not k.startswith("_")))
+    def test_every_code_has_a_path_named_test(self, code):
+        pattern = re.compile(rf"def {re.escape('test_' + code)}\w*_via_(cli|raw_frame)\(")
+        assert pattern.search(self._sources()), (
+            f"no test under tests/ is named test_{code}…_via_cli or "
+            f"…_via_raw_frame; every ErrorCode must be produced end to end by "
+            f"a test whose name says which path it took")
+
 
 class TestValidateSessionIdTypeGuard:
     """The non-str arm. `session_id` arrives from JSON, so a peer can send a
