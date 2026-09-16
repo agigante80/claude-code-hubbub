@@ -391,11 +391,16 @@ it is reused automatically on the next restart without re-passing the flag:
 
 To change the label of an already-connected session **without reconnecting**
 (keeping the same `session_id`), use `relabel` — it updates the label live for
-all peers and persists it too:
+all peers, is adopted by this session's monitor so it survives reconnects
+(server restart, idle-shutdown, re-election), and persists it per project for
+the next `connect`:
 
 ```
 /hubbub:talk relabel "the controller"     # "" clears it
 ```
+
+`--label ""` via `relabel` clears it durably too: the cleared label survives
+a reconnect the same way a set one does.
 
 ## Plugin configuration
 
