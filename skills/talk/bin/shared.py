@@ -1080,6 +1080,17 @@ def rotate_log_if_needed(path: Path, max_bytes: int, backups: int) -> None:
     """Size-based rotation. Single-writer assumption (server-only writer).
     Standard shift: drop the oldest, then path.<i-1> → path.<i> for i in
     [backups..2], then path → path.1.
+
+    The assumption is load-bearing, not a performance note: the caller's
+    rotate-then-append pair is atomic *because* `Server._log_message` is a
+    plain `def` on one event loop with no `await` between them, and that is
+    what lets the receiver's `grep` by `msg_id` across `messages.log*` find
+    every record exactly once (#30, `TestLogRotationUnderLoad`). A second
+    writer, or an `await` between the two, breaks it.
+
+    A `rename` that fails is swallowed per step on purpose: the file stays
+    un-rotated and merely grows, still under the reader's glob. Letting it
+    propagate would skip the caller's append and lose the record.
     """
     try:
         size = path.stat().st_size

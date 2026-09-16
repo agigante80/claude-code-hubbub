@@ -1,3 +1,4 @@
+import errno
 import fcntl
 import json
 import os
@@ -1267,6 +1268,24 @@ class TestRotateLog:
         # Should not have x.log.4 or higher
         assert not (tmp_path / "x.log.4").exists()
         assert not (tmp_path / "x.log.5").exists()
+
+    def test_rename_oserror_leaves_live_file_in_place(self, tmp_path, monkeypatch):
+        """#30. A `rename` that fails is swallowed per step, so the file
+        stays un-rotated and merely grows — where the reader's
+        `messages.log*` glob still covers it. The regression this prevents:
+        a *propagating* rename error would be caught by `_log_message`'s
+        outer `except OSError` and skip the append, and the record would be
+        lost silently."""
+        log = tmp_path / "x.log"
+        log.write_text("X" * 200)
+
+        def refuse(self, target):
+            raise OSError(errno.EACCES, "permission denied", str(self))
+
+        monkeypatch.setattr(Path, "rename", refuse)
+        assert shared.rotate_log_if_needed(log, max_bytes=100, backups=5) is None
+        assert log.stat().st_size == 200
+        assert not (tmp_path / "x.log.1").exists()
 
 
 class TestValidatorsTypeSafe:
