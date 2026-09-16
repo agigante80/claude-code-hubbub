@@ -27,6 +27,36 @@ harness, gating or reporting, in pytest or not. Decided here so no ticket re-lit
   recorded transcripts committed** (public repo). A red eval is a report to read, not a build to
   fix at 2 a.m.
 
+  **Spike #52, answered 2026-09-16 (CC 2.1.271, 10 samples, $1.72): the channel can be
+  simulated, the policy did not fire, kill criterion applied — Tier B is re-shaped, not
+  dropped.** A three-record `history.jsonl` ending in the verified Monitor record (`type:
+  user`, `promptSource: "system"`, `<task-notification>…<event>[hubbub msg=…]</event>…`)
+  loads under `context.history_file` (`--resume` + `execution.prompt: continue`, `with` arm
+  only), and in every arm of every shape the model read the event as a message from peer
+  `alpha`, not as the user. But in 0 of 10 samples did it run `send.py --to alpha`: the
+  faithful shape (b) and the wrapper-as-prompt shape (b') surfaced the message and asked
+  the user (1–2 turns, no tools); only the bare-line control (a) with the plugin loaded
+  tried to act and then to invoke `hubbub:talk` to reply — which the child denied (`Skill`,
+  `decision_reason_type: mode`: the child runs `--permission-mode dontAsk` and the grant
+  was `Bash` only). The policy is SKILL.md prose the model sees only after invoking the
+  skill; a fresh eval child never has, so the wrapper's own trailing sentence ("send a
+  PushNotification … benign output doesn't need one") wins by default. Two harness facts
+  bound the re-shape: the child's env is an allowlist (`PATH`, `LANG`, … plus
+  `ANTHROPIC_`/`CLAUDE_CODE_`/`EVAL_` prefixes; `execution.env` accepts only `EVAL_*`),
+  `HOME` is a sandbox dir and no monitor starts in `-p` mode — so `HUBBUB_*` exports never
+  reach the child, the live bus is safe by construction (`list.py` identical before and
+  after), and a case can never reach a bus either; and on this machine every child Bash
+  call dies at `bwrap: loopback: Failed RTM_NEWADDR` (bubblewrap 0.9.0, kernel 7.0,
+  `sandbox.failIfUnavailable: true`), so only the *attempt* is ever gradeable here — which
+  `tool_used … input_match` and `regex target: trace` do see. **Re-shaped Tier B:** keep
+  `claude plugin eval` + `history_file`, but the seed must carry the loaded skill — a prior
+  `Skill hubbub:talk` tool_use/tool_result pair holding SKILL.md, the state a real session
+  is in after `/hubbub:talk connect` (#52's shape (c)) — with `Skill` granted alongside
+  `Bash`, graders on the attempt (`send.py --to alpha --text '<prefix>:'` in the trace). #35
+  opens with that one shape as a bounded pre-check (one case, `--runs 2`, cap $1) and falls
+  back to a `claude -p --resume <seed> --plugin-dir` script harness with the same seed and
+  regex if (c) does not fire either.
+
 Two consequences the tickets must carry:
 
 - **Tests-only tickets may fix what they expose only when the fix is small and inside the

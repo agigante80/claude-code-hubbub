@@ -42,3 +42,6 @@ Thumbs.db
 
 # Private journal (local thinking notes, never committed)
 .private-journal/
+
+# Eval runner output: transcripts and the HTML report (issue #52). Never committed.
+evals/results/
