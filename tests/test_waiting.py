@@ -8,6 +8,7 @@ its own coverage rather than being trusted because the tests using it pass.
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 import time
@@ -123,3 +124,52 @@ class TestWaitFor:
         with pytest.raises(ValueError):
             waiting.wait_for(lambda: (_ for _ in ()).throw(ValueError("boom")),
                              timeout=10)
+
+
+class TestWaitForAsync:
+    """`wait_for_async` is `wait_for` for a coroutine test. The property it
+    exists for is the last one: it must yield to the event loop between
+    polls, or the in-process server and client it is waiting on can never
+    run to make the condition true."""
+
+    async def test_true_predicate_returns_immediately(self):
+        start = time.monotonic()
+        assert await waiting.wait_for_async(lambda: True, timeout=10) is True
+        assert time.monotonic() - start < 1
+
+    async def test_false_predicate_times_out_within_bounds(self):
+        start = time.monotonic()
+        assert await waiting.wait_for_async(lambda: False, timeout=0.5) is False
+        elapsed = time.monotonic() - start
+        assert 0.4 < elapsed < 3, elapsed
+
+    async def test_oserror_is_swallowed_not_raised(self):
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError("not yet")
+            return True
+
+        assert await waiting.wait_for_async(flaky, timeout=10) is True
+
+    async def test_other_exceptions_still_propagate(self):
+        with pytest.raises(ValueError):
+            await waiting.wait_for_async(
+                lambda: (_ for _ in ()).throw(ValueError("boom")), timeout=10)
+
+    async def test_yields_to_the_loop_between_polls(self):
+        """A concurrent task must get to run while we wait — the whole
+        reason this is not `wait_for`, whose `time.sleep` would starve it."""
+        flag = {"set": False}
+
+        async def setter():
+            await asyncio.sleep(0.05)
+            flag["set"] = True
+
+        task = asyncio.create_task(setter())
+        try:
+            assert await waiting.wait_for_async(lambda: flag["set"], timeout=5) is True
+        finally:
+            await task

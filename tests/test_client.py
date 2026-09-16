@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -18,8 +19,10 @@ import pytest
 import websockets
 
 from bin import shared, client as client_mod, spawn
+from bin.server import Server
 
 from tests import waiting
+from tests.test_helpers import _run_helper
 
 REPO = Path(__file__).resolve().parent.parent
 BIN_DIR = REPO / "skills" / "talk" / "bin"
@@ -358,6 +361,195 @@ class TestFormatMsg:
         assert "\x1b" not in out
         assert "\n" not in out  # newline replaced by ↵
         assert "↵" in out
+
+
+class TestSelfRelabelAdoption:
+    """`Client._adopt_self_relabel` (#40): a `relabeled` frame whose
+    `session_id` is absent *or our own* is adopted into `self.label` and
+    mirrored into `clients/<pid>.session`, so the next `hello` carries the
+    relabeled value instead of the constructor-time one. Everything else —
+    the peer broadcast shape, a missing `label` key, a label that would
+    fail `validate_label` at the next `hello` — is ignored with the old
+    label kept."""
+
+    PPID = 30014
+
+    def _client(self, tmp_data_dir, label="old"):
+        client = client_mod.Client(port=1, name="alpha", label=label, ppid=self.PPID)
+        state = {
+            "session_id": client.session_id,
+            "name": "alpha",
+            "label": label,
+            "token": "tok",
+            "nonce": client.nonce,
+            "listener_pid": os.getpid(),
+            "host": "127.0.0.1",
+            "port": 1,
+            "created_at": "2026-09-15T00:00:00+00:00",
+        }
+        client_mod._write_session_state(self.PPID, state)
+        client._session_state = dict(state)
+        return client, shared.client_session_path(self.PPID)
+
+    @pytest.mark.parametrize("label", ["the controller", "x" * shared.LABEL_MAX_CP])
+    def test_adopts_valid_label(self, tmp_data_dir, label):
+        client, path = self._client(tmp_data_dir)
+        before = json.loads(path.read_text())
+        assert client._adopt_self_relabel({"op": "relabeled", "label": label}) is True
+        assert client.label == label
+        after = json.loads(path.read_text())
+        assert after["label"] == label
+        assert {k: v for k, v in after.items() if k != "label"} == \
+            {k: v for k, v in before.items() if k != "label"}
+
+    def test_adopts_frame_carrying_own_session_id(self, tmp_data_dir):
+        """The "mine" half of "absent or mine": a future server that adds
+        `session_id` to the self-frame keeps working."""
+        client, path = self._client(tmp_data_dir)
+        frame = {"op": "relabeled", "session_id": client.session_id,
+                 "label": "the controller"}
+        assert client._adopt_self_relabel(frame) is True
+        assert client.label == "the controller"
+        assert json.loads(path.read_text())["label"] == "the controller"
+
+    def test_adopts_empty_as_cleared(self, tmp_data_dir):
+        client, path = self._client(tmp_data_dir)
+        assert client._adopt_self_relabel({"op": "relabeled", "label": ""}) is True
+        assert client.label == ""
+        assert json.loads(path.read_text())["label"] == ""
+
+    def test_adoption_is_idempotent(self, tmp_data_dir):
+        client, path = self._client(tmp_data_dir)
+        frame = {"op": "relabeled", "label": "the controller"}
+        assert client._adopt_self_relabel(frame) is True
+        assert client._adopt_self_relabel(frame) is True
+        assert client.label == "the controller"
+        assert json.loads(path.read_text())["label"] == "the controller"
+
+    @pytest.mark.parametrize("label", ["a\nb", 42, "x" * (shared.LABEL_MAX_CP + 1)])
+    def test_ignores_invalid_label(self, tmp_data_dir, caplog, label):
+        """A label that fails `validate_label` is never stored: the next
+        `hello` would be refused `invalid_label` and stop the monitor."""
+        client, path = self._client(tmp_data_dir)
+        before = path.read_text()
+        with caplog.at_level(logging.WARNING, logger="hubbub.client"):
+            assert client._adopt_self_relabel({"op": "relabeled", "label": label}) is False
+        assert client.label == "old"
+        assert path.read_text() == before
+        assert any(r.levelno == logging.WARNING and r.name == "hubbub.client"
+                   for r in caplog.records)
+
+    def test_ignores_broadcast_shaped_frame(self, tmp_data_dir, caplog):
+        """A peer's relabel is never adopted as our own. This is also the
+        old-server case: a server without the self-frame only ever sends
+        the monitor this shape, so nothing changes against it."""
+        client, path = self._client(tmp_data_dir)
+        before = path.read_text()
+        before_mtime = path.stat().st_mtime_ns
+        frame = {"op": "relabeled", "session_id": str(uuid.uuid4()),
+                 "name": "beta", "label": "peer label"}
+        with caplog.at_level(logging.WARNING, logger="hubbub.client"):
+            assert client._adopt_self_relabel(frame) is False
+        assert client.label == "old"
+        assert path.read_text() == before
+        assert path.stat().st_mtime_ns == before_mtime
+        assert not caplog.records  # routine, not a fault
+
+    def test_ignores_absent_label_key(self, tmp_data_dir, caplog):
+        """No `label` key is a malformed frame, not a clear: the server's
+        reply always carries one. Only an explicit "" clears."""
+        client, path = self._client(tmp_data_dir)
+        before = path.read_text()
+        before_mtime = path.stat().st_mtime_ns
+        with caplog.at_level(logging.WARNING, logger="hubbub.client"):
+            assert client._adopt_self_relabel({"op": "relabeled"}) is False
+        assert client.label == "old"
+        assert path.read_text() == before
+        assert path.stat().st_mtime_ns == before_mtime
+        assert any(r.levelno == logging.WARNING and r.name == "hubbub.client"
+                   for r in caplog.records)
+
+    async def test_hello_after_reconnect_carries_adopted_label(
+        self, tmp_data_dir, free_port, monkeypatch,
+    ):
+        """End to end through the real `relabeled` arm, in-process: a control
+        relabel is adopted by the running `_connect_and_serve`, and the next
+        `_connect_and_serve` — which is what `run()` re-enters per reconnect
+        — sends `hello` with the adopted label. Drives `_connect_and_serve`
+        rather than `run()`: `run()` would register an `atexit` hook and a
+        ppid flock in the pytest process, and neither is what is under
+        test."""
+        shared.secure_dir(tmp_data_dir)
+        token = shared.ensure_token(shared.token_path())
+        srv = Server(host="127.0.0.1", port=free_port, idle_shutdown_minutes=10)
+        srv_task = asyncio.create_task(srv.serve())
+        await srv.wait_ready()
+        # The in-process server is this pytest process, whose cmdline is not
+        # `bin/server.py`, so the squatter check cannot pass here. It is
+        # covered by its own tests; the reconnect flow is what this pins.
+        monkeypatch.setattr(shared, "verify_server_identity",
+                            lambda host=None, port=None: True)
+        client = client_mod.Client(port=free_port, name="alpha", label="old",
+                                   ppid=self.PPID)
+        sid = client.session_id
+        serve_task = asyncio.create_task(client._connect_and_serve())
+        ws_watcher = None
+        try:
+            assert await waiting.wait_for_async(lambda: sid in srv._registry)
+            first_ws = srv._registry[sid].ws
+            state = json.loads(shared.client_session_path(self.PPID).read_text())
+            assert state["label"] == "old"
+            ws_ctrl = await websockets.connect(
+                f"ws://127.0.0.1:{free_port}/", max_size=shared.WS_FRAME_CAP)
+            try:
+                await ws_ctrl.send(json.dumps({
+                    "op": "hello", "session_id": str(uuid.uuid4()), "name": "",
+                    "label": "", "cwd": "/tmp", "pid": os.getpid(),
+                    "role": shared.Role.CONTROL.value, "for_session": sid,
+                    "nonce": state["nonce"], "token": token,
+                }))
+                assert json.loads(await ws_ctrl.recv())["op"] == "welcome"
+                await ws_ctrl.send(json.dumps({"op": "relabel", "label": "new"}))
+                ack = json.loads(await asyncio.wait_for(ws_ctrl.recv(), timeout=2.0))
+                assert ack == {"op": "relabeled", "label": "new"}
+            finally:
+                await ws_ctrl.close()
+            assert await waiting.wait_for_async(lambda: client.label == "new")
+            assert json.loads(
+                shared.client_session_path(self.PPID).read_text())["label"] == "new"
+            # Force the reconnect from the server side, as an idle-shutdown
+            # or a re-election would, then re-enter the connect loop.
+            await first_ws.close()
+            await asyncio.wait_for(serve_task, timeout=5.0)
+            serve_task = asyncio.create_task(client._connect_and_serve())
+            assert await waiting.wait_for_async(
+                lambda: sid in srv._registry and srv._registry[sid].ws is not first_ws)
+            ws_watcher = await websockets.connect(
+                f"ws://127.0.0.1:{free_port}/", max_size=shared.WS_FRAME_CAP)
+            await ws_watcher.send(json.dumps({
+                "op": "hello", "session_id": str(uuid.uuid4()), "name": "watcher",
+                "label": "", "cwd": "/tmp", "pid": os.getpid(),
+                "role": shared.Role.AGENT.value, "token": token,
+            }))
+            assert json.loads(await ws_watcher.recv())["op"] == "welcome"
+            await ws_watcher.send(json.dumps({"op": "list"}))
+            resp = json.loads(await asyncio.wait_for(ws_watcher.recv(), timeout=2.0))
+            assert resp["op"] == "list_ok"
+            alpha = next(s for s in resp["sessions"] if s["session_id"] == sid)
+            assert alpha["label"] == "new"
+        finally:
+            if ws_watcher is not None:
+                await ws_watcher.close()
+            serve_task.cancel()
+            try:
+                await serve_task
+            except (asyncio.CancelledError, websockets.ConnectionClosed):
+                pass
+            srv.stop()
+            try:
+                await asyncio.wait_for(srv_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                srv_task.cancel()
 
 
 class TestEnsureServerRunning:
@@ -742,6 +934,159 @@ class TestReElectionAfterServerCrash:
                     os.kill(int(pid_path.read_text().strip()), 9)
                 except (OSError, ValueError):
                     pass
+
+
+def _list_label(stdout: str, name: str):
+    """The LABEL column of `list.py`'s row for `name`, or None if no row.
+
+    Never substring-match a label against the whole output: the CWD column
+    carries this checkout's path, which can contain any word a test picks.
+    Relies on the fixed 24-character NAME and LABEL columns `list.py` prints,
+    so `name` and the label under test must both be shorter than that.
+    """
+    for line in stdout.splitlines():
+        if line[:24].strip() == name:
+            return line[25:49].strip()
+    return None
+
+
+def _wait_for_new_server(pid_path: Path, old_pid: int, timeout: float = 30):
+    """Wait for the pidfile to name a *live* pid other than `old_pid`.
+
+    Returns the new pid, or None on timeout — callers assert on it. The
+    budget is the one `TestReElectionAfterServerCrash` settled on: the time
+    goes to CPU contention under a loaded machine, not to the client's
+    backoff, and a generous budget costs nothing on a pass.
+    """
+    found: list[int] = []
+
+    def elected() -> bool:
+        try:
+            candidate = int(pid_path.read_text().strip())
+        except (OSError, ValueError):
+            return False
+        if candidate == old_pid:
+            return False
+        os.kill(candidate, 0)  # OSError → not alive; wait_for swallows it
+        found.append(candidate)
+        return True
+
+    return found[0] if _wait_for(elected, timeout=timeout) else None
+
+
+@pytest.mark.slow
+class TestRelabelSurvivesReconnect:
+    """Regression for #40: a `relabel` used to be reverted by the monitor's
+    next reconnect, because the server never told the target and the
+    monitor re-sent its constructor-time label in `hello`. One monitor per
+    test, elected server, distinct ppid overrides so the three can never
+    share a lock. The label comes from `HUBBUB_LABEL`, which also proves the
+    adopted label wins over the env-supplied one after the reconnect."""
+
+    def _start(self, tmp_data_dir, free_port, ppid):
+        client = _spawn_client(free_port, "alpha", tmp_data_dir,
+                               ppid_override=ppid,
+                               extra_env={"HUBBUB_LABEL": "old"})
+        session_file = tmp_data_dir / "clients" / f"{ppid}.session"
+        pid_path = tmp_data_dir / f"server.{free_port}.pid"
+        assert _wait_for(session_file.exists), "monitor never registered"
+        assert _wait_for(
+            lambda: shared.safe_pid_alive(int(pid_path.read_text().strip()))
+        ), f"no live server in {pid_path} ({_peek(pid_path)})"
+        return client, session_file, pid_path
+
+    @staticmethod
+    def _stop(client, pid_path):
+        client.terminate()
+        try:
+            client.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            client.kill()
+        # Both servers were spawned by the monitor, not by this test, so
+        # the only handle on the survivor is the endpoint-scoped pidfile.
+        try:
+            os.kill(int(pid_path.read_text().strip()), 9)
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def _session_label(session_file):
+        return json.loads(session_file.read_text())["label"]
+
+    @staticmethod
+    def _kill_and_reelect(pid_path):
+        old_pid = int(pid_path.read_text().strip())
+        os.kill(old_pid, 9)
+        new_pid = _wait_for_new_server(pid_path, old_pid)
+        assert new_pid is not None, "no new server elected after kill"
+        return new_pid
+
+    def _listed_label(self, tmp_data_dir, ppid):
+        """The label `list.py` shows for `alpha` once the monitor is back on
+        the bus after a re-election (exit 0 and a row for it)."""
+        seen: list[str] = []
+
+        def listed() -> bool:
+            r = _run_helper("list.py", tmp_data_dir, ppid)
+            label = _list_label(r.stdout, "alpha") if r.returncode == 0 else None
+            if label is None:
+                return False
+            seen.append(label)
+            return True
+
+        assert _wait_for(listed), "alpha never reappeared in list after re-election"
+        return seen[0]
+
+    def test_relabel_survives_server_kill(self, tmp_data_dir, free_port):
+        ppid = 30011
+        client, session_file, pid_path = self._start(tmp_data_dir, free_port, ppid)
+        try:
+            r = _run_helper("relabel.py", tmp_data_dir, ppid, "--label", "new")
+            assert r.returncode == 0, f"stderr={r.stderr!r}"
+            assert self._listed_label(tmp_data_dir, ppid) == "new"
+            # The state file is rewritten on adoption, which happens on the
+            # monitor's socket right after the CLI got its ack — so wait on
+            # it rather than assert the instant relabel.py exits.
+            assert _wait_for(lambda: self._session_label(session_file) == "new"), (
+                f"state file never adopted the label: {session_file.read_text()!r}")
+            self._kill_and_reelect(pid_path)
+            assert self._listed_label(tmp_data_dir, ppid) == "new"
+            assert self._session_label(session_file) == "new"
+        finally:
+            self._stop(client, pid_path)
+
+    def test_clear_survives_server_kill(self, tmp_data_dir, free_port):
+        ppid = 30012
+        client, session_file, pid_path = self._start(tmp_data_dir, free_port, ppid)
+        try:
+            r = _run_helper("relabel.py", tmp_data_dir, ppid, "--label", "")
+            assert r.returncode == 0, f"stderr={r.stderr!r}"
+            assert "label cleared" in r.stdout
+            assert _wait_for(lambda: self._session_label(session_file) == ""), (
+                f"state file never adopted the clear: {session_file.read_text()!r}")
+            self._kill_and_reelect(pid_path)
+            assert self._listed_label(tmp_data_dir, ppid) == ""
+            assert self._session_label(session_file) == ""
+        finally:
+            self._stop(client, pid_path)
+
+    def test_refused_relabel_leaves_label_alone(self, tmp_data_dir, free_port):
+        """`relabel.py` pre-validates with the same `shared.validate_label`
+        the server uses, so an over-length label is refused before any
+        socket opens; nothing changes, before or after a re-election."""
+        ppid = 30013
+        client, session_file, pid_path = self._start(tmp_data_dir, free_port, ppid)
+        try:
+            r = _run_helper("relabel.py", tmp_data_dir, ppid,
+                            "--label", "x" * (shared.LABEL_MAX_CP + 1))
+            assert r.returncode == 1
+            assert "invalid label" in r.stderr
+            assert self._session_label(session_file) == "old"
+            self._kill_and_reelect(pid_path)
+            assert self._listed_label(tmp_data_dir, ppid) == "old"
+            assert self._session_label(session_file) == "old"
+        finally:
+            self._stop(client, pid_path)
 
 
 @pytest.mark.slow
