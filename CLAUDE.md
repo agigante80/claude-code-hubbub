@@ -78,9 +78,9 @@ fallback). System Python is never touched.
 
 ```bash
 make                                         # help; the default goal
-make test                                    # full suite (~70 s), .venv
+make test                                    # full suite (~120 s), .venv
 make coverage                                # suite under coverage; gate at 80%
-make test-fast                               # skip the 28 @pytest.mark.slow tests
+make test-fast                               # skip the 65 @pytest.mark.slow tests
 make test-system                             # same suite under the SYSTEM python3
 make test-both                               # both interpreters, sequentially
 make versions                                # which Python each venv resolves to
@@ -172,8 +172,8 @@ their own session isn't on.
 
 ### Suite status
 
-Green as of 2026-09-16: `560 passed in ~94 s` on Linux 7.0 / CPython
-3.12 (`make test-system`), 28 of them `@pytest.mark.slow`. The four
+Green as of 2026-09-16: `611 passed in ~115 s` on Linux 7.0 / CPython
+3.12 (`make test-system`), 65 of them `@pytest.mark.slow`. The four
 tests that used to fail all start **two listeners at once**, and they
 were reporting the real server-election race — fixed in `0e33123` by
 the election flock (see the election invariant below). If any of them
@@ -205,11 +205,16 @@ again.
 
 ### Coverage, and the trap in measuring it
 
-`make coverage` reports **83%** (line + branch) and fails below the 80% floor in
+`make coverage` reports **84%** (line + branch) and fails below the 80% floor in
 `.coveragerc`. It sat at 82% from its introduction on 2026-08-15 through
 2026-09-10, module for module; the #40 subprocess tests moved it (`relabel.py`
-65% → 68%, the CLI's own `invalid label` pre-check now reached). Thinnest:
-`discover.py` 61% and `relabel.py` 68% — both are
+65% → 68%, the CLI's own `invalid label` pre-check now reached), and #33's
+error-code matrix moved it again (`server.py` 86%, `send.py` 81%, `client.py`
+84%). **`discover.py` did not move, and that is worth knowing**: #33 predicted
+it would, but its raw-frame tests drive the *server*, and the helper runs that
+do walk the process tree take the happy path through it. Its 61% is still
+error branches that need a hostile process tree, not a missing test file.
+Thinnest: `discover.py` 61% and `relabel.py` 68% — both are
 mostly error branches needing a real process tree or a live listener, and
 `discover.py` is the process-tree walk this file already flags as trap-laden,
 so that is the least comfortable number in the set.
@@ -668,6 +673,18 @@ Fixtures, waits, subprocess spawning, the slow marker and the skip policy are
 `docs/coding-standards.md` → *Tests*. Coding conventions generally (style,
 naming, imports, error handling, env vars, filesystem writes, peer strings,
 docs, releases, commits) live in that file; this one holds the invariants.
+
+One test-shaped invariant does belong here, because it reads as a gap in the
+tests rather than a property of the platform: **`send.py --text` cannot carry a
+payload over 128 KiB on Linux** (`MAX_ARG_STRLEN`, 32 × 4 KiB), and both text
+caps (10 MB direct, 256 KB broadcast) exceed it. So the `TEXT_TOO_LONG` cases —
+and `INVALID_NAME`, `INVALID_LABEL`, `UNKNOWN_OP`, `INVALID_PAYLOAD`, which the
+shipped CLIs pre-validate or never construct — drive the real spawned
+`server.py` over `tests/control.py`, a raw `role=control`/`role=agent` frame
+helper, and **the test name says so**: `_via_raw_frame`, never `_via_cli`.
+`tests/test_shared.py::TestErrorCodeMatrix` fails the run if any `ErrorCode`
+loses its path-named test. Don't "simplify" a raw-frame test into a CLI one —
+there is no CLI that can send the frame.
 
 ## Don't
 

@@ -949,7 +949,7 @@ class TestNameCollisionAutoRetry:
                 except (OSError, ValueError):
                     pass
 
-    def test_exhausted_retries_surfaces_and_stops(self, tmp_data_dir, free_port):
+    def test_name_taken_after_budget_exits_one_via_cli(self, tmp_data_dir, free_port):
         """The path the old test's docstring described but never exercised.
 
         With the budget set to 0 the very first collision is terminal, so this
@@ -958,6 +958,17 @@ class TestNameCollisionAutoRetry:
         silently, because a session that never joined is invisible in `list`
         with nothing to explain why. SKILL.md documents a user-facing reaction
         to this exact line.
+
+        Renamed from `test_exhausted_retries_surfaces_and_stops` (#33): the
+        `_via_cli` suffix is what `TestErrorCodeMatrix` anchors `NAME_TAKEN`
+        on, and it is honest here — this is the real `client.py` process, not
+        a `Server` driven in-process.
+
+        Extended at the same time with the three things the old assertions
+        could not see: the **exit status** (0 until #33's fix; a monitor that
+        never joined the bus should not look like a clean shutdown to Claude
+        Code), the absence of the loser's `.session`, and that the incumbent's
+        own state file is byte-for-byte untouched.
         """
         env = os.environ.copy()
         env["INTER_SESSION_DATA_DIR"] = str(tmp_data_dir)
@@ -974,9 +985,10 @@ class TestNameCollisionAutoRetry:
                 env=env_a, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
-            assert _wait_for(
-                (tmp_data_dir / "clients" / "51001.session").exists
-            ), "first listener never registered"
+            incumbent_state = tmp_data_dir / "clients" / "51001.session"
+            loser_state = tmp_data_dir / "clients" / "51002.session"
+            assert _wait_for(incumbent_state.exists), "first listener never registered"
+            incumbent_bytes = incumbent_state.read_bytes()
 
             env_b = env.copy()
             env_b["INTER_SESSION_PPID_OVERRIDE"] = "51002"
@@ -992,6 +1004,12 @@ class TestNameCollisionAutoRetry:
             assert "taken after" in line, f"got {line!r}"
             assert "connect <other-name>" in line, f"got {line!r}"
             second.wait(timeout=15)
+            assert second.returncode == 1, (
+                "a monitor that never joined the bus must not exit 0 "
+                f"(got {second.returncode})")
+            assert not loser_state.exists(), (
+                "the loser wrote or left a state file helpers would then find")
+            assert incumbent_state.read_bytes() == incumbent_bytes
             assert first.poll() is None, "the incumbent should be unaffected"
         finally:
             for p in (first, second):
@@ -2087,3 +2105,84 @@ class TestHandshakeRejectionDuringShutdown:
                 proc.wait()
             http_proc.kill()
             http_proc.wait()
+
+
+class TestTerminalNameTakenExit:
+    """`run()`'s exit status on the two arms that stop the monitor for good.
+
+    In-process against a bare `websockets.serve` handler rather than the real
+    `Server`: the frame under test is one the real server only produces when a
+    name is genuinely held, and synthesising that would mean a second listener,
+    a second event loop consumer and a race over which of them registers first.
+    The handler is the shortest thing that puts `name_taken` in front of
+    `_connect_and_serve`. `verify_server_identity` is patched True the way
+    `TestSelfRelabelAdoption` does it (L682-683) — the socket lives in the
+    pytest process, whose cmdline is not `bin/server.py`, so the real check
+    cannot pass here and is covered by its own tests.
+
+    These drive `run()`, not `_connect_and_serve`, because the *return value*
+    is the behaviour: `main()` is `sys.exit(loop.run_until_complete(
+    client.run()))`. That costs a ppid flock and an `atexit` hook in the pytest
+    process, both harmless — the flock is closed in `run()`'s `finally`, and
+    the hook is a best-effort `unlink` of a path no other test uses.
+    """
+
+    PPID = 52001
+
+    @pytest.mark.asyncio
+    async def test_run_returns_one_after_budget(
+            self, tmp_data_dir, free_port, monkeypatch):
+        """Terminal `NAME_TAKEN` is a session that never joined the bus.
+
+        Exiting 0 told Claude Code the monitor shut down cleanly, so the one
+        surface that could have reacted saw nothing. Precedent for a non-zero
+        monitor exit is already there: the non-hubbub-service arm returns 1.
+        """
+        shared.secure_dir(tmp_data_dir)
+        shared.ensure_token(shared.token_path())
+
+        async def handler(ws):
+            await ws.recv()
+            await ws.send(json.dumps({
+                "op": "error",
+                "code": shared.ErrorCode.NAME_TAKEN,
+                "message": "name taken",
+                "candidates": [],
+            }))
+            await ws.wait_closed()
+
+        monkeypatch.setattr(shared, "verify_server_identity",
+                            lambda host=None, port=None: True)
+        monkeypatch.setattr(spawn, "ensure_server_running",
+                            lambda *a, **k: None)
+        server = await websockets.serve(handler, "127.0.0.1", free_port)
+        try:
+            client = client_mod.Client(port=free_port, name="gamma",
+                                       ppid=self.PPID, max_collision_retries=0)
+            rc = await asyncio.wait_for(client.run(), timeout=15)
+            assert rc == 1, "a monitor that never joined must not exit 0"
+            assert not shared.client_session_path(self.PPID).exists()
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_monitor_still_returns_zero(
+            self, tmp_data_dir, free_port):
+        """The other `return 0` in `run()` stays 0.
+
+        A respawn into a session that already has a monitor is housekeeping,
+        not a failure: that session *is* connected. Pinning it here is what
+        stops the `NAME_TAKEN` fix from being generalised into "any early
+        return is 1".
+        """
+        shared.secure_dir(shared.clients_dir())
+        holder = os.open(str(shared.client_lock_path(self.PPID)),
+                         os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            client = client_mod.Client(port=free_port, name="gamma",
+                                       ppid=self.PPID)
+            assert await asyncio.wait_for(client.run(), timeout=15) == 0
+        finally:
+            os.close(holder)

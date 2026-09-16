@@ -530,7 +530,7 @@ skips — a skipped test fails the run.
 ```bash
 make              # list every target (the default)
 make test         # full suite — auto-bootstraps .venv on first run
-make test-fast    # skip the 20 subprocess-spawning tests
+make test-fast    # skip the 65 @pytest.mark.slow tests (-m "not slow")
 make test-system  # same suite under the SYSTEM python3
 make test-both    # both interpreters, sequentially — use before shipping
 make coverage     # suite under coverage; fails below the 80% floor

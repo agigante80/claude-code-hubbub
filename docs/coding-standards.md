@@ -301,7 +301,7 @@ imposes is:
 
 ## Tests
 
-The suite is ~560 tests in ~70 s, 28 of them `@pytest.mark.slow`. Async
+The suite is ~610 tests in ~120 s, 65 of them `@pytest.mark.slow`. Async
 tests need no marker (`asyncio_mode = auto`); a new marker must be registered
 in `pytest.ini` (`--strict-markers`).
 

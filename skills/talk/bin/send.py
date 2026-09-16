@@ -137,7 +137,20 @@ async def _run(args) -> int:
                 return 1
         except asyncio.TimeoutError:
             pass
+    except websockets.ConnectionClosed as e:
+        # The bus went away between our `hello` and the reply. The only
+        # `except` here used to be the `TimeoutError` around the inner
+        # `recv()`, so a close during the welcome `recv()`, the `send()` or
+        # the reply `recv()` escaped `asyncio.run` as an uncaught traceback
+        # (#33). A *wedged* server is a different case and not an error: the
+        # inner `wait_for` times out and we exit 0, which is the "success is
+        # silence, no processing ack" contract in docs/DELIVERY.md.
+        print(f"connection closed before the server answered: {e}",
+              file=sys.stderr)
+        return 1
     finally:
+        # A no-op on an already-closed connection, so the arm above does not
+        # need to skip it.
         await ws.close()
     return 0
 
