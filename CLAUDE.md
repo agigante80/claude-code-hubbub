@@ -8,7 +8,16 @@ An agent-to-agent messaging bus for Claude Code: multiple CC sessions on
 the same Unix machine connect to a localhost WebSocket server and
 exchange messages that drive actions in the receiving session.
 
-Two install modes, **both supported and tested**:
+Two install modes, **both supported and tested — at two of three levels**
+(#34). Both are driven at the subprocess level in CI by
+`tests/test_cc_harness.py`: the plugin from `monitors/monitors.json`'s
+substituted command, the standalone from a copied `skills/talk/`. Both are
+driven through a real `claude -p` session on demand by `make probe-cc`.
+**Neither is tested at interactive-session level** — plugin monitors run only
+in interactive CLI sessions, so no automated tier can reach `when: "always"`
+firing at session open, `/plugin marketplace add` → `/plugin install`, or the
+standalone symlink being invoked as `/talk`. Those are
+`docs/guides/release-checklist.md`, by hand, per release.
 
 - **Plugin** (recommended): `/plugin marketplace add …` → `/plugin
   install hubbub@hubbub`, or `claude --plugin-dir <repo>`
@@ -46,7 +55,12 @@ open); `bin/auto_start.py` flips it to `on-skill-invoke:talk` when the
 user runs `/hubbub:talk auto-start off`. Empirically `on-skill-invoke` may not
 reliably auto-spawn a working monitor in current CC versions, so the
 LLM's `Monitor()` call in the skill is what actually establishes the
-connection most of the time.
+connection most of the time. **That sentence is an empirical claim with no
+test behind it and no tier that could carry one** — the scheduler reads `when`
+before any hubbub code runs, and plugin monitors run only in interactive
+sessions. It is re-checked by hand, per release, at step 2 of
+`docs/guides/release-checklist.md`; if a monitor does appear there, this
+paragraph is the thing to update.
 
 When CLAUDE.md and other docs reference `bin/<script>.py` as an
 abbreviated label, the actual path is
@@ -80,12 +94,21 @@ fallback). System Python is never touched.
 make                                         # help; the default goal
 make test                                    # full suite (~120 s), .venv
 make coverage                                # suite under coverage; gate at 80%
-make test-fast                               # skip the 65 @pytest.mark.slow tests
+make test-fast                               # skip the NSLOW @pytest.mark.slow tests
 make test-system                             # same suite under the SYSTEM python3
 make test-both                               # both interpreters, sequentially
+make probe-cc                                # real `claude -p` probe; SPENDS CREDENTIAL
 make versions                                # which Python each venv resolves to
 make clean                                   # remove both venvs
 ```
+
+`make probe-cc` is the **on-demand tier** and is not part of any gate: it
+drives `scripts/probe_cc_layer.py`, which runs the plugin through a real
+`claude -p` session and reports whether a 500-UTF-16-unit first line arrives
+whole. It is never referenced from `ci.yml`, never a pytest test, and never
+run unattended — each case spends the operator's credential. A missing
+prerequisite is exit 2 with a reason, never a skip. `PROBE_ARGS` passes flags
+through (`make probe-cc PROBE_ARGS=--case=plugin-dir`).
 
 To run pytest with non-make flags, use the venv's pytest directly:
 
@@ -172,8 +195,14 @@ their own session isn't on.
 
 ### Suite status
 
-Green as of 2026-09-16: `611 passed in ~115 s` on Linux 7.0 / CPython
-3.12 (`make test-system`), 65 of them `@pytest.mark.slow`. The four
+Green as of 2026-09-17: `NTESTS passed, 1 xfailed` on Linux 7.0 / CPython
+3.12 (`make test-system`), NSLOW of them `@pytest.mark.slow`. The growth from
+560/28 is #33's `tests/test_error_codes.py` and #34's `tests/test_cc_harness.py`.
+The one XFAIL is
+`TestPluginRootSubstitution::test_shipped_root_with_a_space_registers`,
+`strict=True` and pointing at #53 — it goes **red as XPASS** when #53 quotes
+`${CLAUDE_PLUGIN_ROOT}` in `monitors.json`, which is the signal to delete the
+marker rather than the assertion. The four
 tests that used to fail all start **two listeners at once**, and they
 were reporting the real server-election race — fixed in `0e33123` by
 the election flock (see the election invariant below). If any of them
@@ -539,6 +568,23 @@ Before adding any userConfig key, ask whether the thing that must read
 it is a hook or a monitor. If it is a monitor, the answer is not an env
 var.
 
+**Dated cross-reference (2026-09-16, #34).** The `2.1.233` measurement above
+stays exactly as written — it is what was observed, and it is dated. A second
+source now disagrees with part of it: the current Claude Code
+plugins-reference (§Monitors) says monitor processes receive
+`CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA` and `CLAUDE_PROJECT_DIR`. No pytest
+test can settle which is true of the build in front of you — plugin monitors
+run only in interactive sessions, so `tests/test_cc_harness.py` deliberately
+proves the *stronger* property instead (a monitor spawned with **no**
+`CLAUDE_*` at all still registers), and `make probe-cc` can only measure the
+`Monitor()`-shell route. Step 5 of `docs/guides/release-checklist.md` is where
+the build under test is re-measured, per release, from
+`/proc/<listener_pid>/environ`. **#28 is where the answer matters**: if
+`CLAUDE_PLUGIN_DATA` is present, it is a candidate location for the
+config-file bridge #28 needs. What both sources agree on, and what this
+section's conclusion rests on, is untouched: `CLAUDE_PLUGIN_OPTION_*` is
+hooks-only, so userConfig never reaches the monitor.
+
 **`when` has a second, separate problem** worth keeping straight from
 the delivery one above: it is read by CC's monitor scheduler *before any
 hubbub code runs*, so even a working env var could not change it. The
@@ -688,6 +734,35 @@ helper, and **the test name says so**: `_via_raw_frame`, never `_via_cli`.
 `tests/test_shared.py::TestErrorCodeMatrix` fails the run if any `ErrorCode`
 loses its path-named test. Don't "simplify" a raw-frame test into a CLI one —
 there is no CLI that can send the frame.
+
+**The CC-layer harness (`tests/test_cc_harness.py`) has four rules of its
+own**, each protecting an invariant above rather than a style preference:
+
+1. **Substitute `${CLAUDE_PLUGIN_ROOT}` into the command string; never export
+   it.** It is a manifest substitution token, not an env var — a harness that
+   exported it would pass while testing a route that does not exist. The sole
+   exception is `auto_start.py`, which honours it as an explicit override, and
+   only in that subprocess's env dict.
+2. **Swap `python3` for `sys.executable` in every spawn, `TestReexecBootstrap`
+   included.** Under the clean env's `PATH=/usr/bin:/bin` a bare `python3` is
+   the system 3.12 in *both* `make test-both` venvs, so "green on both
+   interpreters" would be one interpreter twice. The bootstrap at
+   `client.py:11-23` is stdlib-only and decides on `$HOME`, `HUBBUB_NO_REEXEC`
+   and `sys.prefix` alone, so the swap costs no fidelity.
+3. **Copy the plugin root into `tmp_path` (`copy_plugin_root`) before any
+   `auto_start.py --off`.** Against the checkout it either hits
+   `_git_worktree_root`'s refusal or mutates the tracked manifest — the
+   `.NOTPARALLEL` reason at `Makefile:35`.
+4. **`HOME` in a clean env relocates the runtime venv the bootstrap looks
+   for.** That is what makes `TestReexecBootstrap` possible without touching
+   the developer's real `~/.claude/data/hubbub/venv`; leave `HOME` out and
+   `Path.home()` falls back to the passwd entry and finds the real one.
+
+Assert the delivery numbers as **literals** (400, 500), not as
+`shared.STDOUT_CAP` / `shared.NOTIFICATION_CLIP`. A test that reads the
+constant it pins follows a change to it instead of catching one — verified,
+not assumed: with `STDOUT_CAP` dropped to 399 the symbol-reading version of
+`TestDeliveryBudget` stayed green.
 
 ## Don't
 

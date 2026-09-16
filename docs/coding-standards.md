@@ -301,7 +301,8 @@ imposes is:
 
 ## Tests
 
-The suite is ~610 tests in ~120 s, 65 of them `@pytest.mark.slow`. Async
+The suite is ~NTESTS tests, NSLOW of them `@pytest.mark.slow`, plus one
+deliberate `xfail(strict=True)` pointing at #53. Async
 tests need no marker (`asyncio_mode = auto`); a new marker must be registered
 in `pytest.ini` (`--strict-markers`).
 
@@ -397,6 +398,65 @@ enclosing `finally` never reaping the subprocesses.
   restores the real `monitors/monitors.json`) must restore it in a
   `finally`, and the Makefile's `.NOTPARALLEL` exists because two such tests
   interleaving would leave the tracked file mutated.
+- **Spawning the way Claude Code spawns** (`tests/test_cc_harness.py`):
+  substitute `${CLAUDE_PLUGIN_ROOT}` into the command string read from
+  `monitors/monitors.json` and **never export it** — it is a manifest
+  substitution token, not an env var, and a harness that exported it would
+  pass while testing a route that does not exist. Swap `python3` for
+  `sys.executable` even in the re-exec test: under `PATH=/usr/bin:/bin` a bare
+  `python3` is the system interpreter in *both* venvs, so `make test-both`
+  would run one interpreter twice. Use `conftest.copy_plugin_root` before any
+  `auto_start.py --off`. Set `HOME` in the clean env to relocate the runtime
+  venv the `client.py:11-23` bootstrap looks for.
+- **Assert delivery numbers as literals** (400, 500), not as
+  `shared.STDOUT_CAP` / `shared.NOTIFICATION_CLIP`. A test that reads the
+  constant it is pinning follows a change to it instead of catching one —
+  measured, not assumed: with `STDOUT_CAP` at 399 the symbol-reading version
+  of `TestDeliveryBudget` stayed green.
+
+### On-demand tier: `make probe-cc`
+
+One script, `scripts/probe_cc_layer.py`, sits outside pytest entirely. It
+drives the plugin through a real `claude -p` session — the SKILL.md connect
+step calling `Monitor()`, a message sent to that session, and whether a
+500-UTF-16-unit first line arrives whole.
+
+**Why it is not a pytest test**, all three of which have to hold at once:
+
+- `.github/workflows/ci.yml` installs Python and `uv` and never Claude Code,
+  so a pytest test needing `claude` is red in CI.
+- The suite fails on any skip (`conftest.pytest_sessionfinish`), and a
+  live-model check that could not run must not look like one that passed.
+- Every run **spends the operator's credential**. A red run here is a report
+  to read, not a build to fix at 2 a.m.
+
+Rules for anything added to this tier:
+
+- **Never referenced from `ci.yml`, never run unattended.** The 2026-09-15
+  overnight loop hit the account's weekly limit on gates alone.
+- **Print the case count and the cost before the first paid call**, so an
+  accidental invocation is visible.
+- **A missing prerequisite is exit 2 with a one-line reason on stderr, never
+  a skip** — `claude` absent, runtime deps unimportable, standalone symlink
+  missing. Check all of them *before* spending anything.
+- **`scripts/` is outside `tests/waiting.py`'s conventions but not outside its
+  lessons.** Never `proc.wait()` on a PIPE'd stdout: redirect the child's
+  stdout (and stderr) to a file and parse after exit. Under
+  `--output-format stream-json --verbose` the child emits every message during
+  the run, 64 KiB is reachable, and the deadlock surfaces as the script's own
+  timeout line — the exact misdiagnosis the FAIL taxonomy exists to prevent.
+  `claude` also block-buffers a non-tty stdout, so the file is near-empty
+  while the run is live; diagnose after the child exits, not during.
+- **Every distinguishable failure gets its own `FAIL <case>: …` line.** A
+  permission denial, a spent turn budget, a session that never registered and
+  a run that never exited must not all read as a damaged notification header.
+- **`HUBBUB_PPID_OVERRIDE` goes in the sender's `Popen(env=…)` only**, never
+  `os.environ`: exported process-wide it reaches the `claude` child, the
+  in-session monitor keys on the override, and the wait for
+  `clients/<claude.pid>.session` can never complete.
+- **Redact `$HOME` in anything destined for a PR.** The assertion target is
+  all main-conversation assistant prose, and model narration quotes
+  `$HOME`-rooted paths readily. This repo is public.
 
 ### What a test is for
 

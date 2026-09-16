@@ -524,19 +524,28 @@ real-world failures that motivated the rule.
 
 ## Development
 
-TDD throughout. Test runner: `pytest` + `pytest-asyncio`. 499 tests, no
+TDD throughout. Test runner: `pytest` + `pytest-asyncio`. 582 tests, no
 skips — a skipped test fails the run.
 
 ```bash
 make              # list every target (the default)
 make test         # full suite — auto-bootstraps .venv on first run
-make test-fast    # skip the 65 @pytest.mark.slow tests (-m "not slow")
+make test-fast    # skip the NSLOW @pytest.mark.slow tests (-m "not slow")
 make test-system  # same suite under the SYSTEM python3
 make test-both    # both interpreters, sequentially — use before shipping
 make coverage     # suite under coverage; fails below the 80% floor
+make probe-cc     # drive the plugin through a real `claude -p` session
 make versions     # which Python each venv resolved to
 make clean        # remove both venvs
 ```
+
+`make probe-cc` is the odd one out: it **spends the operator's Claude
+credential**, one session per case, and is **never run by CI** and never
+unattended. It exists because the layer between Claude Code and this plugin —
+whether a monitor actually starts, and whether a 500-UTF-16-unit notification
+line arrives whole — cannot be reached from pytest, which has no `claude`
+binary in CI and must never skip. A missing prerequisite is exit 2 with a
+reason, not a skip.
 
 The Makefile prefers `uv` if installed, falling back to `python3 -m venv`.
 That choice is not cosmetic: with uv, `.venv` gets **uv's own Python** (3.14)
@@ -553,7 +562,14 @@ system package. `make clean && make test` is the fix.
 CI (`.github/workflows/ci.yml`) runs `make test-both` and `make coverage` on
 every push to `main` and every pull request, and separately checks that
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` carry the
-same version.
+same version. It never runs `make probe-cc`: there is no `claude` binary and
+no credential in CI, by design.
+
+What no automated tier can reach — `when: "always"` firing at *interactive*
+session open, `/plugin marketplace add` → `/plugin install`, and which
+`CLAUDE_*` variables the auto-started monitor actually receives — is a
+by-hand checklist, one numbered step per observation:
+[`docs/guides/release-checklist.md`](docs/guides/release-checklist.md).
 
 Coding conventions — style, naming, the test rules, the two-interpreter bar — are in
 `docs/coding-standards.md`; `CLAUDE.md` keeps the architectural invariants.

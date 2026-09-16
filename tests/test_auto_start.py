@@ -20,26 +20,19 @@ LAZY = "on-skill-invoke:talk"
 
 
 @pytest.fixture
-def fake_plugin_root(tmp_path: Path) -> Path:
+def fake_plugin_root(tmp_path: Path, copy_plugin_root) -> Path:
     # Carries the plugin manifest as well as monitors.json: since fork #16 an
     # explicit CLAUDE_PLUGIN_ROOT must prove it is *ours* before we edit it, so
     # a fixture without this would no longer resemble a real install. Verified
     # the real one at ~/.claude/plugins/marketplaces/hubbub/ has it.
-    claude_plugin = tmp_path / ".claude-plugin"
-    claude_plugin.mkdir()
-    (claude_plugin / "plugin.json").write_text(
-        json.dumps({"name": "hubbub", "version": "0.0.0-test"}) + "\n")
-    monitors_dir = tmp_path / "monitors"
-    monitors_dir.mkdir()
-    (monitors_dir / "monitors.json").write_text(json.dumps([
-        {
-            "name": "hubbub-client",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/talk/bin/client.py",
-            "description": "hubbub messages",
-            "when": LAZY,
-        }
-    ], indent=2) + "\n")
-    return tmp_path
+    #
+    # Now a *copy* of the shipped root (conftest's `copy_plugin_root`) rather
+    # than a synthetic one: the hand-written command string here lacked
+    # `--from-monitor`, so every test in this file edited a `when` field on a
+    # command that ships nowhere. `when=LAZY` keeps the starting state two
+    # tests below assert on (`test_lazy_default`, `test_off_writes_lazy`); no
+    # assertion in this file changes.
+    return copy_plugin_root(tmp_path, when=LAZY)
 
 
 def _run(args: list[str], plugin_root: Path | None,
