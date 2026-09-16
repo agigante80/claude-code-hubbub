@@ -14,8 +14,19 @@ promise, and it is a bucket: file tickets against it as they occur, and its plan
 the prose plus whatever accumulated by the time it opens.
 
 ## Phase: Rename step 2 and the first-gate defects
-state: open
+state: done
 plan: docs/plans/rename-step-2-and-first-gate-defects.md
+
+Closed 2026-09-16, outcome **done**: `v0.3.0` tagged at fa8a3fb, the repo's first tag, with
+all six tickets merged (#10 step 2, #36, #37, #38, #39, #40). Reviewed against the
+plan's expected work, nothing vanished; one thing changed shape — #10 was split, and step 3 became #41
+(Backlog) with a checkable precondition instead of a promise. Work that *appeared*: every
+implementation PR's security pass found a low item, each either fixed on the branch or
+filed — #48 (server stores the raw label, validates NFC length), #49 (a malformed frame
+from a rogue server exits the monitor), #51 (a sustained 5xx refusal is silent when not
+verbose) — plus #43 (the one clip measurement not taken). All five sit in Backlog, assigned.
+One number in the plan's Done-looks-like moved under it: the header budget is stated in the
+code as 500 UTF-16 units measured, not "512", and the body floor as 215/275, not 268.
 
 The `[inter-session …]` stdout prefix is the last identifier still on the old name (#10), and
 step 2 of its three-release staging is the one that needs a *release boundary* to be safe — which
