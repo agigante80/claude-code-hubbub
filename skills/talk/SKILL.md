@@ -398,9 +398,11 @@ Bash("python3 <bin>/relabel.py --label '<text>'")
 ```
 
 `relabel.py` updates the label live on the server (peers see it in `list`
-immediately) and persists it per-project so it also survives the next
-restart. Use `--label ''` to clear the label. Quote `<text>` the same way as
-`send` (single-quote it; escape inner single quotes via `'\''`).
+immediately) and the monitor adopts it, so it survives reconnects — server
+restart, idle-shutdown, re-election; it is also persisted per project so a
+*new* monitor in this project starts with it. Use `--label ''` to clear the
+label; a clear survives reconnects the same way. Quote `<text>` the same way
+as `send` (single-quote it; escape inner single quotes via `'\''`).
 
 ## status
 

@@ -13,6 +13,7 @@ bug rather than a scheduling one.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import selectors
 import time
@@ -37,6 +38,27 @@ def wait_for(predicate, timeout: float = DEFAULT_TIMEOUT,
         except OSError:
             pass
         time.sleep(interval)
+    return False
+
+
+async def wait_for_async(predicate, timeout: float = DEFAULT_TIMEOUT,
+                         interval: float = 0.05) -> bool:
+    """`wait_for` for a coroutine test: yields to the event loop between polls.
+
+    `wait_for` sleeps with `time.sleep`, which inside an `async def` test
+    stalls the very loop the in-process server and client are running on, so
+    the condition it polls can never become true. Same contract otherwise:
+    a bool the caller must assert on, and the same generous default.
+    """
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while loop.time() < end:
+        try:
+            if predicate():
+                return True
+        except OSError:
+            pass
+        await asyncio.sleep(interval)
     return False
 
 
