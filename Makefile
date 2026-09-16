@@ -23,7 +23,7 @@ UV_PY ?= 3.14
 DEPS_STAMP := $(VENV)/.deps-stamp
 SYS_DEPS_STAMP := $(SYS_VENV)/.deps-stamp
 
-.PHONY: test test-fast test-system test-both coverage versions clean help
+.PHONY: test test-fast test-system test-both coverage probe-cc versions clean help
 .DEFAULT_GOAL := help
 
 # `make -j2 test-both` would otherwise run two pytest sessions at once. That
@@ -41,6 +41,8 @@ help:
 	@echo "  make test-system  Run the full suite under the SYSTEM python3 in $(SYS_VENV)."
 	@echo "  make test-both    Both of the above, sequentially. Use before shipping."
 	@echo "  make coverage     Full suite under coverage; fails below the floor in .coveragerc."
+	@echo "  make probe-cc     Drive the plugin through a real 'claude -p' session."
+	@echo "                    Spends the operator's credential; not run by CI."
 	@echo "  make versions     Show which interpreter each venv resolves to."
 	@echo "  make clean        Remove both venvs."
 	@echo ""
@@ -88,6 +90,20 @@ coverage: $(DEPS_STAMP)
 	@$(VENV)/bin/python -m coverage combine
 	@$(VENV)/bin/python -m coverage report
 	@rm -f "$(COV_PTH)"
+
+# The on-demand tier (#34). Not pytest and not CI, for three reasons that all
+# have to hold at once: `ci.yml` has no `claude` binary and no credential; the
+# suite fails on any skip, so a live-model check that could not run must not
+# look like one that passed; and every run costs money — the 2026-09-15
+# overnight loop hit the account's weekly limit on gates alone. A red run here
+# is a report to read, not a build to fix at 2 a.m.
+#
+# Deliberately NOT a $(DEPS_STAMP) dependency: it drives the *runtime* venv the
+# user installed with `/hubbub:talk install-deps`, not the dev one, and the
+# script's own exit-2 preconditions say so far better than a rebuild would.
+# PROBE_ARGS passes flags through, e.g. `make probe-cc PROBE_ARGS=--case=plugin-dir`.
+probe-cc:
+	python3 scripts/probe_cc_layer.py $(PROBE_ARGS)
 
 versions:
 	@printf '%-16s ' "$(VENV):"; \

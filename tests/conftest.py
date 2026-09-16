@@ -1,4 +1,6 @@
+import json
 import os
+import shutil
 import socket
 import sys
 from pathlib import Path
@@ -35,6 +37,54 @@ def free_port():
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+@pytest.fixture
+def copy_plugin_root():
+    """A callable that materialises a *real* plugin root under a temp dir.
+
+    Returns `copy_plugin_root(dst, *, when=None) -> Path`, which copies
+    `.claude-plugin/plugin.json`, the **real** `monitors/monitors.json` and
+    `skills/talk/` into `dst`, rewriting the monitor entry's `when` only when
+    asked.
+
+    One fixture shape, two callers with different needs:
+
+    - `tests/test_cc_harness.py::fake_install` takes it as shipped — `when:
+      "always"` and the command carrying `--from-monitor` — because the whole
+      point there is to spawn *the command CC would spawn*. A synthetic
+      command string would test a command that ships nowhere.
+    - `tests/test_auto_start.py::fake_plugin_root` takes it with
+      `when="on-skill-invoke:talk"`, because two of its tests
+      (`test_lazy_default`, `test_off_writes_lazy`) assert on that starting
+      value. It previously wrote a synthetic command *without*
+      `--from-monitor`; the copy fixes that without changing an assertion.
+
+    Copying rather than pointing at the checkout is load-bearing: any
+    `auto_start.py --off` run against the real root would either hit
+    `_git_worktree_root`'s refusal or mutate the tracked manifest (the reason
+    for `.NOTPARALLEL` in the Makefile).
+    """
+    def _copy(dst, *, when: str | None = None) -> Path:
+        dst = Path(dst)
+        (dst / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / ".claude-plugin" / "plugin.json",
+                     dst / ".claude-plugin" / "plugin.json")
+        (dst / "monitors").mkdir(parents=True, exist_ok=True)
+        monitors = json.loads((REPO_ROOT / "monitors" / "monitors.json").read_text())
+        if when is not None:
+            for entry in monitors:
+                entry["when"] = when
+        (dst / "monitors" / "monitors.json").write_text(
+            json.dumps(monitors, indent=2) + "\n")
+        skill_dst = dst / "skills" / "talk"
+        if not skill_dst.exists():
+            # __pycache__ would be copied as a stale byte-code shadow of the
+            # scripts we are about to run under a different interpreter.
+            shutil.copytree(SKILL_DIR, skill_dst,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        return dst
+    return _copy
 
 
 @pytest.fixture(autouse=True)

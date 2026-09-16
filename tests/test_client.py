@@ -1571,6 +1571,61 @@ class TestAutoStartedNoticesAreQuiet:
         assert "already running" in r.stderr
         assert "already running" not in r.stdout
 
+    # --- the deps-missing half of the same split -------------------------
+    #
+    # `-S` drops site-packages so `import websockets` fails at client.py:44-56
+    # while `shared` still resolves (client.py:59-63 inserts the skill dir on
+    # sys.path and shared.py's module imports are stdlib-only). `-I` keeps a
+    # developer's PYTHONPATH out of the child. `HUBBUB_NO_REEXEC=1` matters
+    # more here than anywhere: with the re-exec live, client.py would execv
+    # into the *developer's* runtime venv, find websockets there, and the
+    # missing-deps branch would never run.
+    #
+    # Coverage note: these two children are invisible to `make coverage`. The
+    # subprocess hook is a `.pth` in site-packages and `-S` is precisely the
+    # flag that skips it — so do not chase these lines when they read as
+    # uncovered.
+    def _run_depless(self, tmp_path, extra_args, ppid):
+        # A *clean* env, not os.environ: the opt-out check (client.py:758)
+        # runs before the deps check (:773), so a stray HUBBUB_AUTO_START=0 or
+        # an inherited autostart-off would make the quiet negative below pass
+        # for the wrong reason — the process would exit at the opt-out, having
+        # never reached the branch under test.
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "HUBBUB_DATA_DIR": str(tmp_path / "data"),
+            "HUBBUB_NO_REEXEC": "1",
+            "HUBBUB_PPID_OVERRIDE": str(ppid),
+        }
+        return subprocess.run(
+            [sys.executable, "-I", "-S", str(BIN_DIR / "client.py"), *extra_args],
+            capture_output=True, text=True, env=env, timeout=30,
+            cwd=str(tmp_path),
+        )
+
+    @pytest.mark.slow
+    def test_missing_deps_notice_reaches_stdout_without_the_flag(self, tmp_path):
+        r = self._run_depless(tmp_path, ["--name", "x"], 424244)
+        assert r.returncode == 0, r.stdout + r.stderr
+        lines = r.stdout.splitlines()
+        assert lines and lines[0].startswith(
+            "[hubbub] dependencies missing — run /hubbub:talk install-deps "
+            "(No module named 'websockets')"
+        ), r.stdout + r.stderr
+
+    @pytest.mark.slow
+    def test_missing_deps_notice_is_quiet_with_the_flag(self, tmp_path):
+        r = self._run_depless(tmp_path, ["--from-monitor"], 424245)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert r.stdout == "", r.stdout
+        # stderr, not silence: a half-finished install-deps (websockets built,
+        # psutil didn't) would otherwise show up only as a monitor that exits
+        # instantly in every session, with nothing anywhere saying why.
+        assert "[hubbub] dependencies missing — run /hubbub:talk install-deps (" \
+            in r.stderr, r.stderr
+        assert "Traceback" not in r.stderr, r.stderr
+        assert not (tmp_path / "data" / "clients" / "424245.session").exists()
+
 
 class TestPpidLockRetriesPastAProbe:
     """`list.py --self` takes the listener flock non-blocking to decide
