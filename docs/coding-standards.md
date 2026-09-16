@@ -301,7 +301,7 @@ imposes is:
 
 ## Tests
 
-The suite is ~500 tests in ~70 s, 20 of them `@pytest.mark.slow`. Async
+The suite is ~560 tests in ~70 s, 28 of them `@pytest.mark.slow`. Async
 tests need no marker (`asyncio_mode = auto`); a new marker must be registered
 in `pytest.ini` (`--strict-markers`).
 
@@ -334,6 +334,12 @@ in `pytest.ini` (`--strict-markers`).
 - Process-global state in `shared.py` (`_unmigrated_this_run`) is reset by
   an autouse fixture. If you add module-level mutable state, add it to that
   fixture.
+- **`Server._before_close`** is a test-only seam: an optional awaitable that
+  `serve()` awaits between `_stop.wait()` returning and `server.close()`,
+  `None` in production. It exists (#30, landed by #39) because from outside
+  the process there is no way to hold a connection in that gap — the
+  503-mid-handshake window — so the hook *is* the gap. Set it on the
+  `Server` instance in an async test; never in shipped code.
 
 ### Waits and deadlines
 

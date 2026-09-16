@@ -197,6 +197,20 @@ class TestPrefixRenameStaging:
         assert "positional" in low
 
 
+class TestTransientHandshakeRefusal:
+    """#39. The "Error notifications" section lists `connected to a non-…
+    service` among the faults that stop the session connecting. A 5xx from a
+    server whose identity matched is *not* one of them: the monitor retries it
+    silently and the notice never fires, so the policy must say so — or the
+    agent tells the user the port is foreign when it is a shutdown race."""
+
+    def test_policy_says_a_5xx_from_a_matching_server_is_retried_silently(self):
+        low = SKILL.lower()
+        assert "502/503/504" in low
+        assert "retries it silently" in low
+        assert "never produces the" in low
+
+
 class TestInstallDepsUx:
     def test_uses_isolated_venv_by_default(self):
         """install-deps must default to a project-local venv at

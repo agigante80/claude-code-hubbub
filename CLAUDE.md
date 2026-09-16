@@ -80,7 +80,7 @@ fallback). System Python is never touched.
 make                                         # help; the default goal
 make test                                    # full suite (~70 s), .venv
 make coverage                                # suite under coverage; gate at 80%
-make test-fast                               # skip the 20 @pytest.mark.slow tests
+make test-fast                               # skip the 28 @pytest.mark.slow tests
 make test-system                             # same suite under the SYSTEM python3
 make test-both                               # both interpreters, sequentially
 make versions                                # which Python each venv resolves to
@@ -172,8 +172,8 @@ their own session isn't on.
 
 ### Suite status
 
-Green as of 2026-09-14: `499 passed in ~69 s` on Linux 7.0 / CPython
-3.12 (`make test-system`), 20 of them `@pytest.mark.slow`. The four
+Green as of 2026-09-16: `560 passed in ~94 s` on Linux 7.0 / CPython
+3.12 (`make test-system`), 28 of them `@pytest.mark.slow`. The four
 tests that used to fail all start **two listeners at once**, and they
 were reporting the real server-election race — fixed in `0e33123` by
 the election flock (see the election invariant below). If any of them
@@ -232,6 +232,15 @@ Three process classes share a localhost WebSocket bus:
    ancestor pid (see the state-file invariant below — it is *not*
    `getppid()`). On registering it writes `clients/<key>.session`, the
    state file the helper CLIs read to find their own session.
+   A 502/503/504 answer to the WebSocket upgrade from a server that
+   passed the pre-connect `verify_server_identity` is treated as
+   transient (#39: websockets closes the listener before it sends 1001
+   to open connections, so a monitor mid-handshake at shutdown gets a
+   503, `legacy/server.py:609-614`) — retried silently with a
+   `--verbose` log line, like a refused connection; any other
+   `InvalidHandshake` is still the "non-hubbub service" exit. The set
+   is `shared.TRANSIENT_HANDSHAKE_STATUSES`, and 500 is deliberately
+   not in it.
 
 3. **`bin/{send,list,relabel}.py`** — short-lived control CLIs. Connect
    with `role=control`, do not register as agents, never appear in

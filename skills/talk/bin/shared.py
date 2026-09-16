@@ -62,6 +62,18 @@ PING_INTERVAL_S = 15
 RECONNECT_BACKOFF_MIN_S = 0.25
 RECONNECT_BACKOFF_MAX_S = 4.0
 RECONNECT_JITTER_FRAC = 0.2
+# HTTP statuses a WebSocket upgrade may be refused with by a server that *is*
+# ours but is going away (#39). websockets' `WebSocketServer.close()` closes
+# the listener first and only then sends 1001 to OPEN connections; a
+# connection still inside the upgrade handshake at that moment is answered
+# 503 instead (`legacy/server.py:609-614`, keyed on `is_serving()`). The
+# monitor treats these like a refused connection — back off and re-elect —
+# provided the pre-connect identity check passed for that attempt. This is
+# websockets' own new-API retry set (`asyncio/client.py::process_exception`:
+# 500, 502, 503, 504) **minus 500**: nothing in server.py's shutdown emits a
+# 500, and a 500 from a live server means its handler raised during the
+# handshake — a fault worth reporting, not a race. Don't add 500 back.
+TRANSIENT_HANDSHAKE_STATUSES = frozenset({502, 503, 504})
 BROADCAST_RATE_LIMIT_PER_MIN = 60
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
