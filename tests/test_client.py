@@ -426,7 +426,14 @@ class TestSelfRelabelAdoption:
         assert client.label == "the controller"
         assert json.loads(path.read_text())["label"] == "the controller"
 
-    @pytest.mark.parametrize("label", ["a\nb", 42, "x" * (shared.LABEL_MAX_CP + 1)])
+    # The SEC-001 structural characters are listed here on purpose, not left to
+    # TestValidateLabel: adoption is a new ingestion point for a peer-shaped
+    # string, and the SEC-003 lesson is that the security test has to cover
+    # *that* field. `[hubbub` is the shape a forged header would start with.
+    @pytest.mark.parametrize(
+        "label",
+        ["a\nb", 42, "x" * (shared.LABEL_MAX_CP + 1), '[hubbub', 'x"y', "a]b"],
+    )
     def test_ignores_invalid_label(self, tmp_data_dir, caplog, label):
         """A label that fails `validate_label` is never stored: the next
         `hello` would be refused `invalid_label` and stop the monitor."""
