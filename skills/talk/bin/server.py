@@ -647,10 +647,19 @@ class Server:
     def _log_message(self, msg: dict, kind: str) -> None:
         """Single-writer JSONL log on the server side. Eliminates the
         previous double-write where every receiver appended the same msg.
-        Rotates by size."""
+        Rotates by size.
+
+        Plain `def`, no `await`: on the single event loop the rotate-then-
+        append pair below runs to completion before any other handler
+        resumes, which is what makes "every `msg_id` exactly once across
+        `messages.log*`" hold under concurrent senders
+        (`TestLogRotationUnderLoad`, #30). Don't make this async or move
+        the append to a thread without also serialising the pair."""
+        # `secure_dir` never raises and `messages_log_path` is pure, so `path`
+        # is always bound before anything below can raise.
+        path = shared.messages_log_path()
         try:
             shared.secure_dir(shared.data_dir())
-            path = shared.messages_log_path()
             shared.rotate_log_if_needed(
                 path, shared.MESSAGES_LOG_MAX_BYTES, shared.MESSAGES_LOG_BACKUPS,
             )
@@ -671,8 +680,13 @@ class Server:
                 os.chmod(path, 0o600)
             except OSError:
                 pass
-        except OSError:
-            pass
+        except OSError as e:
+            # #30. Delivery proceeds regardless — a log failure never blocks
+            # the bus — but the receiver may be shown a `cont` pointer to a
+            # record that was never written, so say so where `spawn.py`
+            # routes it: `server.log`.
+            log.warning("messages.log append failed for msg_id=%s at %s: %s",
+                        msg["msg_id"], path, e)
 
     async def _handle_rename(self, state: ClientState, payload) -> None:
         new_name = payload.get("name", "")
