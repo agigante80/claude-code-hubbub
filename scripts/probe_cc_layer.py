@@ -687,9 +687,14 @@ def main() -> int:
             except (OSError, ValueError):
                 pass
         streams = sorted(tmpdir.glob("*.stream.jsonl"))
-        kept = Path(tempfile.gettempdir()) / "probe-cc-streams"
+        # A fresh 0700 directory per run, never a fixed name under the shared
+        # temp dir: these streams are the model's raw output, unredacted (only
+        # the printed summary goes through redact()), and a predictable path is
+        # both world-readable by default and pre-creatable by another local user
+        # as a symlink we would then copy through.
+        kept = None
         if streams:
-            kept.mkdir(exist_ok=True)
+            kept = Path(tempfile.mkdtemp(prefix="probe-cc-streams-"))
             for s in streams:
                 shutil.copy2(s, kept / s.name)
         shutil.rmtree(tmpdir, ignore_errors=True)
