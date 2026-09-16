@@ -548,13 +548,22 @@ fork #22, and #28 for the same defect in `port` and
 
 ## Truncated messages
 
-Long messages (whose body exceeds the ~400-char stdout cap) arrive in
-two lines:
+Long messages arrive in two lines:
 
 ```
-[hubbub msg=q7r8 from="data-pipe" sid=5b7e40d1 truncated=2097152] <first ~400 chars of text>
-[hubbub msg=q7r8 cont] full text 2097152 bytes at ~/.claude/data/hubbub/messages.log
+[hubbub msg=q7r8 from="data-pipe" sid=5b7e40d1 truncated=2097152] <preview of the text>
+[hubbub msg=q7r8 cont] full text 2097152 chars at ~/.claude/data/hubbub/messages.log
 ```
+
+What you may rely on: the first line always fits in what Claude Code
+keeps of a notification (500 UTF-16 code units, measured), so the header
+and the preview you see are exactly what the monitor printed. The
+preview is at most 400 and at least 275 UTF-16 code units (shorter only
+when the sender's name and label are near their maximum; a character
+above U+FFFF costs two units), and it always ends on a whole character.
+The `truncated=N` count and the `cont` line's `N chars` are code points
+of the full text, so they say how much is missing, not how many bytes
+the log record holds.
 
 The full payload is in `~/.claude/data/hubbub/messages.log` as a
 JSONL record. Fetch it with:

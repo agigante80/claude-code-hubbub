@@ -310,6 +310,12 @@ The rule for a **new notice** is unchanged by the flip: copy an existing
 prefix literal exactly, don't spell it from a variable, and update the
 counts above.
 
+Step 2 also shortened every header by 7 UTF-16 units (`[hubbub` vs
+`[inter-session`). The stdout body cap takes no number from that: it is
+computed from the rendered header (`NOTIFICATION_CLIP -
+utf16_len(header)`, see the size-limits table), so it absorbs whichever
+prefix is emitted on its own.
+
 `tests/test_reaction_policy.py::TestPrefixRenameStaging` pins the
 staging. Its `CODE` is `client.py` and its `SHARED` is `shared.py`;
 until `a0aec34` it read only the former, so the guard could not see a
@@ -633,7 +639,7 @@ profile can never resurface a label the live path would reject.
 | WebSocket frame                | 16 MB                                       |
 | Direct `text` length           | 10 MB (server-enforced)                     |
 | Broadcast `text` length        | 256 KB (server-enforced)                    |
-| Stdout notification body       | 400 chars (issue #2: Claude Code clips each monitor notification at ~512 chars total, so the body cap is sized to leave room for our prefix) |
+| Stdout notification body       | `min(STDOUT_CAP=400, NOTIFICATION_CLIP=500 − utf16_len(header))` UTF-16 units — 400 for the typical sender, never fewer than 275. Claude Code clips each monitor notification at 500 UTF-16 code units (measured on 2.1.270, #38; commit `53548b2` had guessed ~512 chars), so the body is sized from the rendered header rather than a fixed allowance, and our own cut never splits a surrogate pair |
 
 Direct messages whose body exceeds the stdout cap display as a truncated
 first-line and a `cont` line pointing to `messages.log` so the receiver
