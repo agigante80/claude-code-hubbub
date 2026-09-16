@@ -39,7 +39,7 @@ mostly-ready, and each one a thing a user of 0.2.x can hit today. #37 rides alon
 README-only and wants the same release note.
 
 ## Phase: Behaviour under test
-state: planned
+state: open
 plan: docs/plans/behaviour-under-test.md
 
 The largest untested surface is the Claude Code layer: the reaction policy is checked only as prose
@@ -47,6 +47,10 @@ The largest untested surface is the Claude Code layer: the reaction policy is ch
 real CLI path (#33), and two server concurrency paths were named but never probed (#30). All four
 gated BLOCKED or NEEDS-WORK on the same open question — what harness, at what cost, gating or
 reporting — so they are planned together and the plan answers it once.
+
+Opened 2026-09-16. The plan makes the harness call: two tiers — deterministic subprocess
+tests in pytest and CI, model-driven `claude plugin eval` cases on demand and report-only —
+with a spike (#52) first to prove the eval harness can see a monitor line at all.
 
 ## Phase: Configuration reaches the monitor
 state: planned
