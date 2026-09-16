@@ -558,12 +558,16 @@ Long messages arrive in two lines:
 What you may rely on: the first line always fits in what Claude Code
 keeps of a notification (500 UTF-16 code units, measured), so the header
 and the preview you see are exactly what the monitor printed. The
-preview is at most 400 and at least 275 UTF-16 code units (shorter only
-when the sender's name and label are near their maximum; a character
-above U+FFFF costs two units), and it always ends on a whole character.
-The `truncated=N` count and the `cont` line's `N chars` are code points
-of the full text, so they say how much is missing, not how many bytes
-the log record holds.
+preview is at most 400 UTF-16 code units; its budget is computed from
+the rendered header, so it shrinks only when the sender's name and
+label are near their maximum (a character above U+FFFF costs two
+units). With server-validated inputs it is never below 215 units — a
+decomposed (NFD) label, which validation measures in NFC form but
+renders raw — and 275 for an NFC label. It always ends on a whole
+character. The `truncated=N` count and the `cont` line's `N chars` are
+code points of the sanitised text — control and ANSI characters are
+stripped before counting — so they say how much is missing, not how
+many bytes the log record holds.
 
 The full payload is in `~/.claude/data/hubbub/messages.log` as a
 JSONL record. Fetch it with:
