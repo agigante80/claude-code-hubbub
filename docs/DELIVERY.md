@@ -16,6 +16,14 @@ Delivery is a **write to a live WebSocket**, nothing more:
   *with the candidate list*; no match returns `UNKNOWN_PEER`.
 - On success the frame is written to the peer's socket and appended to
   `messages.log`.
+- **The log record is written before the frame**, and rotation moves
+  records whole: `_log_message` is synchronous on the event loop, so the
+  rotate-then-append pair cannot interleave with another sender's, and a
+  rename never splits a file. Within the 5-backup window no record is
+  dropped, duplicated or split, so a `cont` pointer resolves while its
+  record is within `messages.log*` — with one retry-safe transient
+  exception during a rotation, below. Pinned by
+  `tests/test_server.py::TestLogRotationUnderLoad` (#30).
 
 So within the bus there is **no silent misdelivery and no silent drop**.
 A sender that addresses a name nobody holds gets an error frame back.
@@ -33,6 +41,19 @@ A sender that addresses a name nobody holds gets an error frame back.
   `label`, `cwd`, `since` — an age, not a last-activity time. A peer
   connected 124 hours ago and a peer that answered a second ago look
   identical.
+- **A failed append is logged, not retried.** If `messages.log` cannot
+  be written the message is still delivered and one `WARNING` naming the
+  `msg_id` and the path goes to `server.log`; the receiver's `cont`
+  pointer then names a record that was never written. That is a data-dir
+  problem, visible in `server.log`, not a bus failure (#30).
+- **A `cont` pointer can miss once during a rotation, when fewer than
+  five backups exist.** The receiver's shell expands `messages.log*`
+  before `grep` opens the files. With all five backups present a rotation
+  in that gap cannot hide a record (both the glob and the shift are
+  ascending): a member may vanish, or be read under two names, which
+  `head -1` absorbs. With fewer than five, the highest backup shifts to a
+  name the glob never listed, so a record there is missed by that one
+  expansion. Retrying resolves it.
 - **Names are not stable identities.** A name belongs to whoever holds
   it *now*. On the machine studied, `arivit` had been held by six
   different `session_id`s since 2026-07-12 as sessions restarted. A name

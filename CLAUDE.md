@@ -653,7 +653,10 @@ profile can never resurface a label the live path would reject.
 Direct messages whose body exceeds the stdout cap display as a truncated
 first-line and a `cont` line pointing to `messages.log` so the receiver
 can fetch the full payload via `grep -F <msg_id>`. Truncated content is
-preserved in full in `messages.log` regardless.
+preserved in full in `messages.log` regardless. Rotate-then-append is
+atomic because `_log_message` is synchronous on the event loop (pinned by
+`TestLogRotationUnderLoad`, #30), and a failed append is logged to
+`server.log` — the one way a `cont` pointer can point at nothing.
 
 ### Reaction policy lives in `SKILL.md`
 
