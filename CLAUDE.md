@@ -205,9 +205,11 @@ again.
 
 ### Coverage, and the trap in measuring it
 
-`make coverage` reports **82%** (line + branch) and fails below the 80% floor in
-`.coveragerc`. Re-measured 2026-09-10 and unchanged since it was introduced on
-2026-08-15, module for module. Thinnest: `discover.py` 61% and `relabel.py` 65% — both are
+`make coverage` reports **83%** (line + branch) and fails below the 80% floor in
+`.coveragerc`. It sat at 82% from its introduction on 2026-08-15 through
+2026-09-10, module for module; the #40 subprocess tests moved it (`relabel.py`
+65% → 68%, the CLI's own `invalid label` pre-check now reached). Thinnest:
+`discover.py` 61% and `relabel.py` 68% — both are
 mostly error branches needing a real process tree or a live listener, and
 `discover.py` is the process-tree walk this file already flags as trap-laden,
 so that is the least comfortable number in the set.
@@ -555,6 +557,25 @@ disconnect + reconnect (`TaskStop` the monitor, re-`Monitor` with
 in-place — `bin/relabel.py` sends the `relabel` op over a `role=control`
 connection, so the session keeps its `session_id` and stays on the bus.
 Don't "unify" the two by making relabel bounce the monitor.
+
+A relabel also **survives reconnects** (#40). `self.label` is set once in
+`Client.__init__` and sent in every `hello`, so a relabel that only touched
+the server's registry used to revert on the next idle-shutdown or
+re-election. The server therefore delivers the `relabeled` reply to the
+target monitor as well as to the control connection (a frame with **no**
+`session_id` key; the peer broadcast carries one), and
+`client.py::_adopt_self_relabel` adopts a `relabeled` frame whose
+`session_id` is absent *or its own* — `payload.get("session_id",
+self.session_id) == self.session_id` — into `self.label` and rewrites
+`clients/<pid>.session`, so the next `hello` carries the new label. The
+label is re-validated with `shared.validate_label` before adoption, since a
+stored invalid label would make the next `hello` fail `invalid_label` and
+stop the monitor for good. A frame with no `label` key is malformed and
+ignored with a warning; only an explicit `""` clears. Don't add a `self`
+field to that frame; the key-less shape is the contract, and it is what a
+0.2.0 client already ignores harmlessly. The per-project profile is neither
+read nor written on reconnect — it is keyed by repo root, not by session, so
+re-reading it would let session A's relabel flip session B's label.
 
 ### Peer-controlled strings that reach the header are sanitized twice
 

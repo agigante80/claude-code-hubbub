@@ -258,6 +258,10 @@ class Client:
         # loop the server-side filter exists to prevent.
         self._tried_names: set[str] = {name} if name else set()
         self._connect_task: Optional[asyncio.Task] = None
+        # The dict last written to `clients/<pid>.session`, kept so an
+        # adopted relabel can rewrite the file with every other field
+        # (token, nonce, created_at, …) carried over unchanged (#40).
+        self._session_state: Optional[dict] = None
 
     def stop(self) -> None:
         self._stop.set()
@@ -434,7 +438,7 @@ class Client:
             # the fourth as exhaustion and drop off the bus for good.
             self._collision_retries = 0
 
-            _write_session_state(self.ppid, {
+            self._session_state = {
                 "session_id": self.session_id,
                 "name": self.name,
                 "label": self.label,
@@ -444,7 +448,8 @@ class Client:
                 "host": self.host,
                 "port": self.port,
                 "created_at": datetime.now(tz=timezone.utc).isoformat(),
-            })
+            }
+            _write_session_state(self.ppid, self._session_state)
 
             ping_task = asyncio.create_task(self._ping_loop(ws))
             try:
@@ -462,6 +467,10 @@ class Client:
                         if was_truncated:
                             _print_line(_format_truncation_pointer(payload.get("msg_id", ""), full_len))
                     elif op in ("peer_joined", "peer_left", "renamed", "relabeled"):
+                        if op == "relabeled":
+                            # Adopt first, then fall through to the one
+                            # verbose print below — not a second print site.
+                            self._adopt_self_relabel(payload)
                         if self.verbose:
                             _print_line(f"[inter-session] {op}: {payload}")
                     elif op == "pong":
@@ -471,6 +480,59 @@ class Client:
                             _print_line(f"[inter-session] {op}: {payload}")
             finally:
                 ping_task.cancel()
+
+    def _adopt_self_relabel(self, payload: dict) -> bool:
+        """Adopt a `relabeled` frame addressed to this session (#40).
+
+        `self.label` is set once from `_resolve_label` and sent in every
+        `hello`, so a `relabel` — which only mutates the server's registry
+        entry — used to revert on the next reconnect (idle-shutdown,
+        re-election, dropped socket). The server now delivers `relabeled`
+        to the target too; adopting it here makes the in-memory label the
+        source of truth for every later `hello`, and rewriting the state
+        file keeps `clients/<pid>.session` agreeing with the bus.
+
+        Self-frame discriminator: "absent or mine". The frame the server
+        sends the target is `{"op": "relabeled", "label": …}` — no
+        `session_id` key — while the peer broadcast carries the relabeled
+        peer's `session_id` and `name`. "Absent *or mine*" rather than just
+        "absent" so the check does not rest on the broadcast omitting the
+        key forever: a server that adds `session_id` to the self-frame is
+        still recognised, and no new field is needed. Chosen over a
+        `"self": true` flag because the key-less reply is what an agent
+        relabeling over its own socket already receives, and it degrades
+        cleanly both ways (an older client already ignores the frame; an
+        older server never sends it and the pre-#40 behaviour persists).
+
+        Two things are deliberately *not* adopted, each with a warning on
+        stderr rather than a stdout line — the stdout prefix count is pinned
+        by `TestPrefixRenameStaging` and this adds nothing to it:
+
+        - no `label` key at all: malformed, not a clear. The server's reply
+          always carries `label`; only an explicit "" clears.
+        - a label that fails `shared.validate_label`: storing it would make
+          the next `hello` fail `invalid_label`, and that path stops the
+          monitor for good. A buggy or foreign server must not be able to
+          strand us that way, so the boundary check runs a third time here.
+
+        Returns True when adopted. The profile on disk is neither read nor
+        written: it is per project, not per session, and `relabel.py`
+        already persists to it for the *next* `connect`.
+        """
+        if payload.get("session_id", self.session_id) != self.session_id:
+            return False
+        if "label" not in payload:
+            log.warning("ignoring relabeled frame without a label: %r", payload)
+            return False
+        label = payload["label"]
+        if not shared.validate_label(label):
+            log.warning("ignoring relabeled frame with an invalid label: %r", payload)
+            return False
+        self.label = label
+        if self._session_state is not None:
+            self._session_state["label"] = label
+            _write_session_state(self.ppid, self._session_state)
+        return True
 
     async def _ping_loop(self, ws) -> None:
         while not self._stop.is_set():

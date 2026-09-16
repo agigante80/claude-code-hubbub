@@ -732,6 +732,19 @@ class Server:
             await self._send_error(state.ws, code, message)
             return
         await state.ws.send(json.dumps({"op": "relabeled", "label": new_label}))
+        if state is not target:
+            # The target monitor is told too (#40). Without this it learns
+            # nothing — the peer broadcast below excludes it — and its next
+            # `hello` re-sends the constructor-time label, reverting the
+            # relabel on the first reconnect. Same key-less shape as the
+            # reply above: no `session_id`, no `name`. That absence is what
+            # `client.py::_adopt_self_relabel` discriminates on, and it is
+            # exactly the frame an agent relabeling over its own socket
+            # already receives (the reply, when `state is target`) — so no
+            # new op or field, and a pre-#40 client treats it as the
+            # verbose-only noise it already ignores. Don't add a `self`
+            # flag here; the key-less shape is the contract.
+            await self._safe_send(target, {"op": "relabeled", "label": new_label})
         await self._broadcast_event(
             {"op": "relabeled", "session_id": target_sid,
              "name": target_name, "label": new_label},

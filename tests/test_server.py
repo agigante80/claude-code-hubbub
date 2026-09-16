@@ -11,6 +11,7 @@ import pytest
 import websockets
 
 from bin import shared, spawn
+from tests.waiting import wait_for_async as _wait_for_async
 
 # Server module imported lazily to give tests a chance to run shared first
 from bin.server import Server
@@ -192,6 +193,37 @@ class TestHello:
             assert err["code"] == shared.ErrorCode.UNAUTHORIZED
         finally:
             await ws.close()
+
+    async def test_missing_token_rejected(self, running_server):
+        """A `hello` with no `token` key at all is refused as `unauthorized`
+        and never registered. Distinct from `test_unauthorized_rejected`,
+        which sends a *wrong* token: `payload.get("token")` is `None` here.
+        Pinned for #40 because every op that follows `hello` — `relabel`
+        included — relies on this refusal as its no-token case."""
+        srv, port, token = running_server
+        ws = await _connect(port)
+        ws_other = await _connect(port)
+        try:
+            await _send_op(
+                ws, "hello",
+                session_id=str(uuid.uuid4()),
+                name="alpha",
+                label="",
+                cwd="/tmp",
+                pid=1,
+                role="agent",
+            )
+            err = await _recv(ws)
+            assert err["op"] == "error"
+            assert err["code"] == shared.ErrorCode.UNAUTHORIZED
+            assert err["message"] == "bad token"
+            await _hello(ws_other, token, name="beta")
+            await _send_op(ws_other, "list")
+            resp = await _recv_until(ws_other, "list_ok")
+            assert all(s["name"] != "alpha" for s in resp["sessions"])
+        finally:
+            await ws.close()
+            await ws_other.close()
 
     async def test_name_taken(self, running_server):
         srv, port, token = running_server
@@ -512,6 +544,10 @@ class TestRelabel:
             await _send_op(ws_a, "relabel", label="the controller")
             ack = await _recv_until(ws_a, "relabeled")
             assert ack["label"] == "the controller"
+            # The agent relabeled over its own socket: the ack *is* the
+            # self-frame, so it must not be delivered a second time (#40).
+            with pytest.raises(asyncio.TimeoutError):
+                await _recv(ws_a, timeout=0.3)
             # Peer sees the live event referencing the SAME session_id (no reconnect).
             event = await _recv_until(ws_b, "relabeled")
             assert event["session_id"] == sid_a
@@ -544,14 +580,21 @@ class TestRelabel:
     async def test_invalid_label_rejected(self, running_server):
         srv, port, token = running_server
         ws = await _connect(port)
+        ws_watcher = await _connect(port)
         try:
             await _hello(ws, token, name="alpha")
+            await _hello(ws_watcher, token, name="watcher")
+            await _drain(ws, timeout=0.3)  # watcher's peer_joined
             await _send_op(ws, "relabel", label="a\nb")  # newline is invalid
             err = await _recv(ws)
             assert err["op"] == "error"
             assert err["code"] == shared.ErrorCode.INVALID_LABEL
+            # A refused relabel reaches nobody: no broadcast to the peer.
+            with pytest.raises(asyncio.TimeoutError):
+                await _recv(ws_watcher, timeout=0.3)
         finally:
             await ws.close()
+            await ws_watcher.close()
 
     async def test_relabel_non_string(self, running_server):
         srv, port, token = running_server
@@ -565,10 +608,37 @@ class TestRelabel:
         finally:
             await ws.close()
 
-    async def test_control_relabel_mutates_listener(self, running_server):
+    async def test_relabel_over_max_length_rejected(self, running_server):
+        """The only cap on `relabel` is `LABEL_MAX_CP`; one code point over
+        it is `invalid_label`, and no frame reaches any socket (#40)."""
         srv, port, token = running_server
-        sid = str(uuid.uuid4())
-        nonce = "ctl-relabel-nonce"
+        ws = await _connect(port)
+        ws_watcher = await _connect(port)
+        try:
+            sid, _ = await _hello(ws, token, name="alpha", label="old")
+            await _hello(ws_watcher, token, name="watcher")
+            await _drain(ws, timeout=0.3)  # watcher's peer_joined
+            await _send_op(ws, "relabel", label="x" * (shared.LABEL_MAX_CP + 1))
+            err = await _recv(ws)
+            assert err["op"] == "error"
+            assert err["code"] == shared.ErrorCode.INVALID_LABEL
+            with pytest.raises(asyncio.TimeoutError):
+                await _recv(ws, timeout=0.3)
+            with pytest.raises(asyncio.TimeoutError):
+                await _recv(ws_watcher, timeout=0.3)
+            await _send_op(ws_watcher, "list")
+            resp = await _recv_until(ws_watcher, "list_ok")
+            alpha = next(s for s in resp["sessions"] if s["session_id"] == sid)
+            assert alpha["label"] == "old"
+        finally:
+            await ws.close()
+            await ws_watcher.close()
+
+    async def _listener_control_watcher(self, port, token, sid, nonce):
+        """The three-socket setup shared by the control-path tests: a
+        registered listener with `nonce`, a control connection bound to it
+        via `for_session` + `nonce`, and a third agent watching the bus.
+        Returns the three sockets with the watcher's join noise drained."""
         ws_listener = await _connect(port)
         await _send_op(
             ws_listener, "hello", session_id=sid, name="alpha", label="",
@@ -583,16 +653,26 @@ class TestRelabel:
         await _recv(ws_ctrl)  # welcome
         ws_watcher = await _connect(port)
         await _hello(ws_watcher, token, name="watcher")
+        await _drain(ws_listener, timeout=0.3)  # watcher's peer_joined
+        await _drain(ws_watcher, timeout=0.3)
+        return ws_listener, ws_ctrl, ws_watcher
+
+    async def test_control_relabel_mutates_listener(self, running_server):
+        srv, port, token = running_server
+        sid = str(uuid.uuid4())
+        nonce = "ctl-relabel-nonce"
+        ws_listener, ws_ctrl, ws_watcher = await self._listener_control_watcher(
+            port, token, sid, nonce)
         try:
-            for _ in range(2):
-                try:
-                    await _recv(ws_watcher, timeout=0.3)
-                except asyncio.TimeoutError:
-                    break
             # Control relabels — must mutate the LISTENER, not the control conn.
             await _send_op(ws_ctrl, "relabel", label="ctl-label")
             ack = await _recv_until(ws_ctrl, "relabeled")
             assert ack["label"] == "ctl-label"
+            # The listener itself is told, with the key-less self-frame shape
+            # (#40): its monitor adopts this so the next `hello` carries it.
+            own = await _recv_until(ws_listener, "relabeled")
+            assert own == {"op": "relabeled", "label": "ctl-label"}
+            assert "session_id" not in own
             event = await _recv_until(ws_watcher, "relabeled")
             assert event["session_id"] == sid
             assert event["name"] == "alpha"
@@ -601,6 +681,134 @@ class TestRelabel:
             await ws_listener.close()
             await ws_ctrl.close()
             await ws_watcher.close()
+
+    async def test_target_gets_self_frame_not_broadcast(self, running_server):
+        """The target receives exactly one `relabeled` frame — the key-less
+        self-frame — and stays excluded from the peer broadcast, which
+        carries `session_id` + `name` (#40)."""
+        srv, port, token = running_server
+        sid = str(uuid.uuid4())
+        nonce = "ctl-relabel-nonce"
+        ws_listener, ws_ctrl, ws_watcher = await self._listener_control_watcher(
+            port, token, sid, nonce)
+        try:
+            await _send_op(ws_ctrl, "relabel", label="ctl-label")
+            await _recv_until(ws_ctrl, "relabeled")
+            own = await _recv_until(ws_listener, "relabeled")
+            assert "session_id" not in own
+            assert "name" not in own
+            assert own["label"] == "ctl-label"
+            with pytest.raises(asyncio.TimeoutError):
+                await _recv(ws_listener, timeout=0.3)
+            event = await _recv_until(ws_watcher, "relabeled")
+            assert event["session_id"] == sid
+            assert event["name"] == "alpha"
+            assert event["label"] == "ctl-label"
+            with pytest.raises(asyncio.TimeoutError):
+                await _recv(ws_watcher, timeout=0.3)
+        finally:
+            await ws_listener.close()
+            await ws_ctrl.close()
+            await ws_watcher.close()
+
+    async def test_control_hello_with_wrong_nonce_cannot_relabel(self, running_server):
+        """The control-role `hello` arm: a guessed nonce is `unauthorized`
+        ("stale listener state; reconnect") and an unknown `for_session` is
+        `unknown_peer`. Neither connection is registered, so no `relabel`
+        can follow, and the listener's label is untouched (#40)."""
+        srv, port, token = running_server
+        sid = str(uuid.uuid4())
+        ws_listener = await _connect(port)
+        await _send_op(
+            ws_listener, "hello", session_id=sid, name="alpha", label="old",
+            cwd="/tmp", pid=1, role="agent", nonce="real-nonce", token=token,
+        )
+        await _recv(ws_listener)
+        ws_bad_nonce = await _connect(port)
+        ws_bad_sid = await _connect(port)
+        ws_watcher = await _connect(port)
+        try:
+            await _send_op(
+                ws_bad_nonce, "hello", session_id=str(uuid.uuid4()), name="",
+                label="", cwd="/tmp", pid=2, role="control",
+                for_session=sid, nonce="guessed-wrong", token=token,
+            )
+            err = await _recv(ws_bad_nonce)
+            assert err["op"] == "error"
+            assert err["code"] == shared.ErrorCode.UNAUTHORIZED
+            assert err["message"] == "stale listener state; reconnect"
+            await _send_op(
+                ws_bad_sid, "hello", session_id=str(uuid.uuid4()), name="",
+                label="", cwd="/tmp", pid=3, role="control",
+                for_session=str(uuid.uuid4()), nonce="real-nonce", token=token,
+            )
+            err = await _recv(ws_bad_sid)
+            assert err["op"] == "error"
+            assert err["code"] == shared.ErrorCode.UNKNOWN_PEER
+            await _hello(ws_watcher, token, name="watcher")
+            await _send_op(ws_watcher, "list")
+            resp = await _recv_until(ws_watcher, "list_ok")
+            alpha = next(s for s in resp["sessions"] if s["session_id"] == sid)
+            assert alpha["label"] == "old"
+        finally:
+            await ws_listener.close()
+            await ws_bad_nonce.close()
+            await ws_bad_sid.close()
+            await ws_watcher.close()
+
+    async def test_control_relabel_after_listener_gone_is_unknown_peer(
+        self, running_server,
+    ):
+        """The `unknown_peer` arm of `_handle_relabel`: a control whose
+        listener has since disconnected has nothing to relabel. The reject
+        returns before either `relabeled` frame is built, so the #40 send
+        to the target is never reached — and there is no target to reach.
+        Distinct from `TestControlAfterListenerGone`, which covers `send`
+        and `broadcast` (those reject `unauthorized`, via a different
+        check)."""
+        srv, port, token = running_server
+        sid = str(uuid.uuid4())
+        nonce = "ctl-relabel-gone-nonce"
+        ws_listener, ws_ctrl, ws_watcher = await self._listener_control_watcher(
+            port, token, sid, nonce)
+        try:
+            await ws_listener.close()
+            assert await _wait_for_async(lambda: sid not in srv._registry)
+            await _drain(ws_watcher, timeout=0.3)  # alpha's peer_left
+            await _send_op(ws_ctrl, "relabel", label="ctl-label")
+            err = await _recv_until(ws_ctrl, "error")
+            assert err["code"] == shared.ErrorCode.UNKNOWN_PEER
+            assert err["message"] == "no listener to relabel"
+            with pytest.raises(asyncio.TimeoutError):
+                await _recv(ws_watcher, timeout=0.3)
+        finally:
+            await ws_ctrl.close()
+            await ws_watcher.close()
+
+    async def test_agent_cannot_relabel_a_peer(self, running_server):
+        """`relabel` carries no target field: an agent can only relabel
+        itself. A's relabel changes A's entry and leaves B's alone (#40),
+        and decoy addressing fields on the op are ignored, not honoured."""
+        srv, port, token = running_server
+        ws_a = await _connect(port)
+        ws_b = await _connect(port)
+        try:
+            sid_a, _ = await _hello(ws_a, token, name="alpha", label="a-label")
+            sid_b, _ = await _hello(ws_b, token, name="beta", label="b-label")
+            await _send_op(ws_a, "relabel", label="hijacked",
+                           to="beta", session_id=sid_b, for_session=sid_b,
+                           target=sid_b)
+            ack = await _recv_until(ws_a, "relabeled")
+            assert ack["label"] == "hijacked"
+            await _recv_until(ws_b, "relabeled")
+            await _send_op(ws_b, "list")
+            resp = await _recv_until(ws_b, "list_ok")
+            by_sid = {s["session_id"]: s for s in resp["sessions"]}
+            assert by_sid[sid_a]["label"] == "hijacked"
+            assert by_sid[sid_b]["label"] == "b-label"
+        finally:
+            await ws_a.close()
+            await ws_b.close()
 
 
 class TestReconnect:
