@@ -44,10 +44,15 @@ NOTIFICATION_CLIP = 500
 # the worst case measured 632 units (before #10 shortened the prefix by
 # 7). The body is therefore capped at
 # `min(STDOUT_CAP, NOTIFICATION_CLIP - utf16_len(header))` in
-# `client._format_msg`: 400 for the typical sender, never fewer than 275 (500
-# minus the 225-unit maximal header). The body shrinks and the header never
-# does — it is the SEC-002 authority marker, and it is what the reaction
-# policy parses.
+# `client._format_msg`: 400 for the typical sender, and with server-validated
+# inputs never fewer than 215. The floor is computed from the *rendered*
+# header, not from LABEL_MAX_CP: `validate_label` measures the NFC form but
+# the server stores the raw label and nobody calls `normalize_label`, so a
+# decomposed (NFD) Hangul label of 60 syllables validates and renders as 180
+# BMP code points — a 285-unit header, body 215. An NFC label tops out at 120
+# units (60 astral code points) — a 225-unit header, body 275. The body
+# shrinks and the header never does — it is the SEC-002 authority marker,
+# and it is what the reaction policy parses.
 #
 # Deliberately not lowered to absorb the `sid=` fingerprint or the worst-case
 # header: a truncated body has a `cont` pointer to the full text in

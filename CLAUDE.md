@@ -639,7 +639,7 @@ profile can never resurface a label the live path would reject.
 | WebSocket frame                | 16 MB                                       |
 | Direct `text` length           | 10 MB (server-enforced)                     |
 | Broadcast `text` length        | 256 KB (server-enforced)                    |
-| Stdout notification body       | `min(STDOUT_CAP=400, NOTIFICATION_CLIP=500 − utf16_len(header))` UTF-16 units — 400 for the typical sender, never fewer than 275. Claude Code clips each monitor notification at 500 UTF-16 code units (measured on 2.1.270, #38; commit `53548b2` had guessed ~512 chars), so the body is sized from the rendered header rather than a fixed allowance, and our own cut never splits a surrogate pair |
+| Stdout notification body       | `min(STDOUT_CAP=400, NOTIFICATION_CLIP=500 − utf16_len(header))` UTF-16 units — 400 for the typical sender; computed from the *rendered* header, so with server-validated inputs never below 215 (a decomposed NFD label: `validate_label` measures NFC, the server stores raw, `normalize_label` has no callers) and 275 for an NFC label. Claude Code clips each monitor notification at 500 UTF-16 code units (measured on 2.1.270, #38; commit `53548b2` had guessed ~512 chars), so the body is sized from the rendered header rather than a fixed allowance, and our own cut never splits a surrogate pair |
 
 Direct messages whose body exceeds the stdout cap display as a truncated
 first-line and a `cont` line pointing to `messages.log` so the receiver

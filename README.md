@@ -506,8 +506,11 @@ real-world failures that motivated the rule.
 - WebSocket frame size: 16 MB.
 - Direct `text` length: 10 MB.
 - Broadcast `text` length: 256 KB.
-- Stdout notification body: at most 400 UTF-16 code units, at least
-  275 under a maximal name+label. The first line never exceeds 500
+- Stdout notification body: at most 400 UTF-16 code units. The budget
+  is computed from the rendered header; with server-validated inputs
+  it is never below 215 units (a decomposed, NFD label — validation
+  measures the NFC form but the raw label is what renders) and 275 for
+  an NFC label. The first line never exceeds 500
   UTF-16 units, the clip Claude Code applies to each monitor
   notification (measured on 2.1.270), so the body shrinks to fit
   beside the header rather than the other way round. Above the cap,
