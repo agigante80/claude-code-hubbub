@@ -1859,6 +1859,33 @@ class TestHandshakeRejectionDuringShutdown:
         ]
         assert len(refusals) == 3, caplog.record_tuples
 
+    # -- the transient arm's premise ------------------------------------------
+
+    def test_identity_failure_stops_before_connect(self, free_port, monkeypatch, capsys):
+        """The transient arm (client.py L332-337) is safe only because
+        `verify_server_identity` runs *before* `websockets.connect` and a
+        failure stops the monitor without ever connecting; the security pass on
+        #50 found nothing pinned that ordering, so this does."""
+        monkeypatch.setattr(shared, "verify_server_identity", lambda *a, **k: False)
+
+        def no_connect(*_a, **_k):
+            raise AssertionError("connect must not be called")
+
+        monkeypatch.setattr(websockets, "connect", no_connect)
+        client = self._client(free_port, 40008)
+        rc = asyncio.run(client.run())
+        out = capsys.readouterr().out
+        assert rc == 0, f"identity failure must stop the monitor cleanly; stdout={out!r}"
+        assert client._stop.is_set(), "identity failure must set _stop"
+        line = out.strip()
+        assert re.match(
+            r"^\[(?:inter-session|hubbub)\] server identity check failed "
+            rf"\(port {free_port} is held by something that isn't bin/server\.py\); "
+            r"refusing to connect$",
+            line,
+        ), line
+        assert "\n" not in line, "exactly one stdout line"
+
     # -- end to end ---------------------------------------------------------
 
     @pytest.mark.slow
