@@ -6,6 +6,7 @@ import fcntl
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -45,11 +46,19 @@ def free_port():
     return port
 
 
-def _spawn_listener(port, name, env_data_dir, ppid_override):
+def _spawn_listener(port, name, env_data_dir, ppid_override, label=None):
+    """`label` sets `HUBBUB_LABEL`, which `client._resolve_label` honours as a
+    one-off runtime override (not persisted to the project profile)."""
     env = os.environ.copy()
     env["INTER_SESSION_DATA_DIR"] = str(env_data_dir)
     env["PYTHONPATH"] = str(REPO)
     env["INTER_SESSION_PPID_OVERRIDE"] = str(ppid_override)
+    if label is not None:
+        env["HUBBUB_LABEL"] = label
+    # `os.environ.copy()` already carries the coverage hook to the child; the
+    # splice is here so a rebuild on a clean env dict cannot silently make
+    # client.py's read loop read as 0%.
+    env.update(waiting.coverage_env())
     return subprocess.Popen(
         [sys.executable, str(BIN_DIR / "client.py"),
          "--port", str(port), "--name", name, "--idle-shutdown-minutes", "1"],
@@ -188,6 +197,72 @@ class TestSendHelper:
             assert line_b.startswith("[hubbub msg="), f"got {line_b!r}"
             assert "hello everyone" in line_b, f"got {line_b!r}"
             assert 'from="alpha"' in line_b
+        finally:
+            for p in (listener_a, listener_b):
+                p.terminate()
+                try:
+                    p.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+            _kill_server()
+
+    def test_truncated_message_from_maximal_sender_carries_its_cont_pointer(
+            self, tmp_data_dir, free_port):
+        """#38, the read loop half. `_format_msg` is header-aware, so the
+        maximal sender (40-char name, 60 astral-code-point label) truncates a
+        380-char body at 273 units; the read loop used to decide the `cont`
+        pointer by truncating a second time at the default 400, so that
+        message printed `truncated=380]` with no `cont` line. Now one
+        `_format_msg` result drives both prints.
+
+        380 rather than 10 MB because `send.py` takes the body from argv,
+        which Linux caps at 128 KiB per argument; the 8-digit marker is the
+        pure unit test's job. 380 discriminates: above this sender's 273-unit
+        budget, below the default 400, so the unfixed tree prints it as one
+        untruncated 593-unit line.
+        """
+        ppid_a, ppid_b = 20011, 20012
+        name_a = "a" * 40
+        listener_a = _spawn_listener(free_port, name_a, tmp_data_dir, ppid_a,
+                                     label="\U0001F600" * shared.LABEL_MAX_CP)
+        listener_b = _spawn_listener(free_port, "beta", tmp_data_dir, ppid_b)
+        try:
+            assert _wait_for_state(tmp_data_dir, ppid_a) is not None, \
+                f"listener {ppid_a} never registered"
+            assert _wait_for_state(tmp_data_dir, ppid_b) is not None, \
+                f"listener {ppid_b} never registered"
+
+            r = _run_helper("send.py", tmp_data_dir, ppid_a,
+                            "--to", "beta", "--text", "z" * 380)
+            assert r.returncode == 0, f"stderr={r.stderr!r}"
+            line1 = waiting.read_line(listener_b)
+            assert "truncated=380]" in line1, f"got {line1!r}"
+            assert f'from="{name_a}"' in line1
+            assert shared.utf16_len(line1) <= shared.NOTIFICATION_CLIP, \
+                (shared.utf16_len(line1), line1)
+            m = re.match(r"\[hubbub msg=(\S+) from=", line1)
+            assert m, line1
+            line2 = waiting.read_line(listener_b)
+            assert line2.startswith(
+                f"[hubbub msg={m.group(1)} cont] full text 380 chars at "), \
+                f"got {line2!r}"
+            assert line2.endswith(str(tmp_data_dir / "messages.log")), line2
+
+            # Second phase: a body under this sender's budget is printed whole
+            # and the very next line is the next message, no pointer between.
+            r = _run_helper("send.py", tmp_data_dir, ppid_a,
+                            "--to", "beta", "--text", "z" * 200)
+            assert r.returncode == 0, f"stderr={r.stderr!r}"
+            r = _run_helper("send.py", tmp_data_dir, ppid_a,
+                            "--to", "beta", "--text", "second")
+            assert r.returncode == 0, f"stderr={r.stderr!r}"
+            line3 = waiting.read_line(listener_b)
+            assert line3.endswith("z" * 200), f"got {line3!r}"
+            assert "truncated=" not in line3 and "cont]" not in line3, line3
+            assert shared.utf16_len(line3) == 406, (shared.utf16_len(line3), line3)
+            line4 = waiting.read_line(listener_b)
+            assert re.match(r"\[hubbub msg=\S+ from=", line4), f"got {line4!r}"
+            assert line4.endswith(" second"), f"got {line4!r}"
         finally:
             for p in (listener_a, listener_b):
                 p.terminate()

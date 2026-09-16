@@ -139,6 +139,45 @@ class TestTruncateForStdout:
         assert full_len == 1000
         assert len(truncated) <= 100
 
+    def test_utf16_cut_never_splits_a_surrogate_pair(self):
+        """#38. `cap` is UTF-16 code units, the unit Claude Code clips in,
+        and the cut never lands inside a code point. Before this the cap was
+        code points: `s[:400]` of a body whose 400th code point was astral
+        returned 401 units, and a clip at 500 could then split the pair and
+        show U+FFFD. `full_len` stays code points (it is the wire contract of
+        `truncated=N`)."""
+        s = "a" * 399 + "\U0001F600" * 2          # 401 cp, 403 units
+        assert shared.truncate_for_stdout(s, cap=400) == ("a" * 399, True, 401)
+        s = "\U0001F600" * 200 + "a"              # 201 cp, 401 units
+        assert shared.truncate_for_stdout(s, cap=400) == ("\U0001F600" * 200, True, 201)
+        # Exactly at the cap in units fits untouched, whatever its cp count.
+        s = "\U0001F600" * 200                    # 200 cp, 400 units
+        assert shared.truncate_for_stdout(s, cap=400) == (s, False, 200)
+
+
+class TestUtf16Len:
+    """`utf16_len` is what every notification-clip comparison uses: Claude
+    Code clips at 500 UTF-16 code units (JavaScript `String.length`), so a
+    code point above U+FFFF costs two (#38)."""
+
+    def test_counts_utf16_code_units(self):
+        assert shared.utf16_len("") == 0
+        assert shared.utf16_len("abc") == 3
+        assert shared.utf16_len("\u00e9") == 1
+        assert shared.utf16_len("\U0001F600") == 2
+        assert shared.utf16_len("a\U0001F600b") == 4
+
+    def test_lone_surrogate_counts_one_unit_and_does_not_raise(self):
+        """`from_name` and `msg_id` reach `_format_msg` unsanitised, and
+        `json.loads('"\\ud83d"')` yields a lone surrogate that a plain
+        `str.encode("utf-16-le")` refuses with UnicodeEncodeError. A display
+        budget must never turn into a crashed monitor, so the measure is
+        non-raising: a lone surrogate is one unit, as it is in JavaScript."""
+        with pytest.raises(UnicodeEncodeError):
+            "\ud83d".encode("utf-16-le")   # the trap this guards against
+        assert shared.utf16_len(json.loads('"\\ud83d"')) == 1
+        assert shared.utf16_len("a\ud83db") == 3
+
 
 class TestAtomicToken:
     def test_creates_token_if_missing(self, tmp_path):
@@ -270,6 +309,10 @@ class TestProtocolConstants:
         assert shared.TEXT_CAP == 10 * 1024 * 1024
         assert shared.BROADCAST_TEXT_CAP == 256 * 1024
         assert shared.STDOUT_CAP == 400
+        # The measured clip (Claude Code 2.1.270, UTF-16 units); the body
+        # cap must leave room under it for a header (#38).
+        assert shared.NOTIFICATION_CLIP == 500
+        assert shared.STDOUT_CAP < shared.NOTIFICATION_CLIP
         assert shared.TEXT_CAP < shared.WS_FRAME_CAP
 
     def test_default_port(self):

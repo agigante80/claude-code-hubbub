@@ -506,11 +506,14 @@ real-world failures that motivated the rule.
 - WebSocket frame size: 16 MB.
 - Direct `text` length: 10 MB.
 - Broadcast `text` length: 256 KB.
-- Stdout notification body: 400 chars (Claude Code clips monitor
-  notifications at ~512 chars total; the cap leaves room for our
-  prefix). Above this, the receiver sees a truncated first line plus
-  a `cont` pointer line to `~/.claude/data/hubbub/messages.log`,
-  where the full payload is always preserved.
+- Stdout notification body: at most 400 UTF-16 code units, at least
+  275 under a maximal name+label. The first line never exceeds 500
+  UTF-16 units, the clip Claude Code applies to each monitor
+  notification (measured on 2.1.270), so the body shrinks to fit
+  beside the header rather than the other way round. Above the cap,
+  the receiver sees a truncated first line plus a `cont` pointer line
+  to `~/.claude/data/hubbub/messages.log`, where the full payload is
+  always preserved.
 - `messages.log` rotates at 50 MB, keeping 5 backups
   (`messages.log.1` … `messages.log.5`), so retrieval of an older
   message has to span the rotated set.
