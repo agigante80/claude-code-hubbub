@@ -611,4 +611,12 @@ split is deliberate:
 `server identity check failed`, `hello rejected: …`, `connected to a
 non-hubbub service`, `name … taken after N retries`. Treat those
 as real: the first is the port-squatter check, and `hello rejected:
-unauthorized` is the symptom of a split token namespace.
+unauthorized` is the symptom of a split token namespace. One thing that
+is *not* such a fault: an HTTP 502/503/504 answer to the WebSocket
+upgrade from a server whose identity matched. That is the bus shutting
+down (idle-shutdown or a `bye`-driven exit) while this monitor was
+mid-handshake; the monitor retries it silently — it backs off and
+re-elects like any dropped connection — and it never produces the
+`connected to a non-… service` line. So if that line does appear, the
+port really is held by something that is not hubbub; do not read it as
+a shutdown race.

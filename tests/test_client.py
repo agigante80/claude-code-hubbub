@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import functools
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import threading
@@ -18,6 +20,7 @@ from pathlib import Path
 
 import pytest
 import websockets
+from websockets.datastructures import Headers
 
 from bin import shared, client as client_mod, spawn
 from bin.server import Server
@@ -1604,3 +1607,456 @@ class TestPpidLockRetriesPastAProbe:
             assert client_mod._acquire_ppid_lock(998) is None
         finally:
             held.close()
+
+
+# The "this port is not hubbub" notice, accepting either prefix spelling.
+# `client.py` carried `[inter-session]` through 0.2.x; PR #44 (rename step 2)
+# moved it to `[hubbub]`. Matching both means these tests needed no edit on
+# either side of that merge, while `TestPrefixRenameStaging` still pins that
+# the emitter uses exactly one spelling at a time.
+_NON_HUBBUB_NOTICE_RE = re.compile(
+    r"^\[(?:inter-session|hubbub)\] connected to a non-(?:inter-session|hubbub) "
+    r"service on port (?P<port>\d+): (?P<reason>.*)$"
+)
+
+
+def _is_non_hubbub_notice(line: str, port: int) -> bool:
+    m = _NON_HUBBUB_NOTICE_RE.match(line.strip())
+    return bool(m) and int(m.group("port")) == port
+
+
+# A plain HTTP/1.1 server that answers 404 to everything: the foreign service
+# the `InvalidHandshake` arm exists to report. `protocol_version` must be
+# `HTTP/1.1`: the stdlib default is `HTTP/1.0`, and websockets 13.1 rejects any
+# other status line (`legacy/http.py:129-130`) *before* reading the status, so
+# the client would see `InvalidMessage`, not `InvalidStatusCode(404)`. Run as a
+# subprocess whose argv ends with the literal `bin/server.py` so
+# `shared.verify_server_identity` accepts it (the check is a substring match on
+# the joined cmdline); an in-pytest thread would fail identity first and never
+# reach the arm under test. The trailing argv is a dummy the script ignores.
+_HTTP_404_ONE_LINER = (
+    "import sys\n"
+    "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+    "class H(BaseHTTPRequestHandler):\n"
+    "    protocol_version = 'HTTP/1.1'\n"
+    "    def do_GET(self):\n"
+    "        self.send_error(404)\n"
+    "    def log_message(self, *a):\n"
+    "        pass\n"
+    "HTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()\n"
+)
+
+
+class TestHandshakeRejectionDuringShutdown:
+    """#39: a 502/503/504 out of the WebSocket upgrade is a transient fault,
+    not a foreign service.
+
+    websockets' `WebSocketServer.close()` closes the listener first and then
+    sends 1001 to every OPEN connection; a connection still inside the HTTP
+    upgrade handshake at that moment is instead answered `HTTP 503` because
+    `is_serving()` is now false (`legacy/server.py:609-614`). Before the fix
+    `Client.run()` caught that `InvalidStatusCode(503)` as `InvalidHandshake`,
+    printed `connected to a non-… service` and returned 1 — the monitor was
+    gone for the rest of the session with a notice that said the port was not
+    hubbub, when the pre-connect identity check had just passed for it.
+
+    These tests drive `Client.run()` in-process with `_connect_and_serve`
+    stubbed. The stub is set on the *instance*, and `run()` awaits
+    `self._connect_and_serve()` with no arguments, so an `async def stub()`
+    would also work; `*_a, **_k` keeps it correct if someone later sets it on
+    the class instead.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _in_process(self, tmp_data_dir, monkeypatch):
+        # No election, no server: the arm under test is entirely inside the
+        # reconnect loop.
+        monkeypatch.setattr(spawn, "ensure_server_running", lambda *a, **k: True)
+        # Read at runtime at the top of every iteration, so the patch takes
+        # and each backoff wait costs 10 ms instead of 250.
+        monkeypatch.setattr(shared, "RECONNECT_BACKOFF_MIN_S", 0.01)
+        # `run()` registers `_delete_session_state(ppid)` with atexit, which
+        # resolves the data dir *at interpreter exit* — after this fixture's
+        # env vars are gone, i.e. against the developer's real `$HOME`. The
+        # unlink would miss, but a test must never reach the real data dir.
+        monkeypatch.setattr(client_mod.atexit, "register", lambda *a, **k: None)
+
+    @staticmethod
+    def _client(port: int, ppid: int, **kw) -> client_mod.Client:
+        return client_mod.Client(port=port, name="a", ppid=ppid, **kw)
+
+    @staticmethod
+    def _raise_once_then_stop(client, exc):
+        """`_connect_and_serve` stand-in: raise `exc` on the first attempt,
+        stop the client and return cleanly on the second."""
+        calls = []
+
+        async def stub(*_a, **_k):
+            calls.append(1)
+            if len(calls) == 1:
+                raise exc
+            client.stop()
+
+        return stub, calls
+
+    @staticmethod
+    def _raise_always(client, exc):
+        calls = []
+
+        async def stub(*_a, **_k):
+            calls.append(1)
+            raise exc
+
+        return stub, calls
+
+    # -- transient statuses fall through to the backoff -------------------
+
+    def test_503_falls_through_to_backoff(self, free_port, monkeypatch, capsys):
+        """AC1. The exact bug: `InvalidStatusCode(503)` reaching the
+        `InvalidHandshake` arm must not exit 1 or print the notice; a second
+        connect attempt follows."""
+        client = self._client(free_port, 40001)
+        stub, calls = self._raise_once_then_stop(
+            client, websockets.InvalidStatusCode(503, Headers()))
+        monkeypatch.setattr(client, "_connect_and_serve", stub)
+        rc = asyncio.run(client.run())
+        out = capsys.readouterr().out
+        assert rc == 0, f"monitor exited on a 503 mid-handshake; stdout={out!r}"
+        assert len(calls) == 2, "no second connect attempt after the 503"
+        assert "service on port" not in out, out
+
+    @pytest.mark.parametrize("status", [502, 503, 504])
+    def test_502_and_504_treated_like_503(self, status, free_port, monkeypatch, capsys):
+        client = self._client(free_port, 40002)
+        stub, calls = self._raise_once_then_stop(
+            client, websockets.InvalidStatusCode(status, Headers()))
+        monkeypatch.setattr(client, "_connect_and_serve", stub)
+        rc = asyncio.run(client.run())
+        out = capsys.readouterr().out
+        assert rc == 0, f"HTTP {status} exited the monitor; stdout={out!r}"
+        assert len(calls) == 2
+        assert "service on port" not in out, out
+
+    def test_new_api_invalid_status_shape_is_also_transient(
+            self, free_port, monkeypatch, capsys):
+        """Pins the `getattr` fallback. websockets 14+ raises `InvalidStatus`
+        with the status on `.response.status_code` and no `.status_code`; a pin
+        bump must not silently reopen the bug."""
+        from websockets.exceptions import InvalidStatus
+        from websockets.http11 import Response
+
+        exc = InvalidStatus(Response(503, "Service Unavailable", Headers()))
+        assert not hasattr(exc, "status_code"), "the test double is not the 14+ shape"
+        client = self._client(free_port, 40003)
+        stub, calls = self._raise_once_then_stop(client, exc)
+        monkeypatch.setattr(client, "_connect_and_serve", stub)
+        rc = asyncio.run(client.run())
+        out = capsys.readouterr().out
+        assert rc == 0, f"new-API 503 exited the monitor; stdout={out!r}"
+        assert len(calls) == 2
+        assert "service on port" not in out, out
+
+    # -- everything else is still a foreign service -------------------------
+
+    def test_404_still_exits_as_foreign_service(self, free_port, monkeypatch, capsys):
+        """AC2. A status outside the transient set keeps the notice-and-exit
+        path exactly as before the fix."""
+        client = self._client(free_port, 40004)
+        stub, calls = self._raise_always(
+            client, websockets.InvalidStatusCode(404, Headers()))
+        monkeypatch.setattr(client, "_connect_and_serve", stub)
+        rc = asyncio.run(client.run())
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert len(calls) == 1, "a 404 must be terminal, not retried"
+        line = out.strip()
+        assert _is_non_hubbub_notice(line, free_port), line
+        assert line.endswith(": server rejected WebSocket connection: HTTP 404"), line
+        assert "\n" not in line, "exactly one stdout line"
+
+    def test_500_is_not_in_the_transient_set(self, free_port, monkeypatch, capsys):
+        """500 is deliberately excluded (websockets' own retry set is
+        500/502/503/504): nothing in server.py's shutdown emits a 500, and a
+        500 from a live server means its handler raised during the handshake
+        — a fault worth reporting, not a race."""
+        assert 500 not in shared.TRANSIENT_HANDSHAKE_STATUSES
+        client = self._client(free_port, 40005)
+        stub, calls = self._raise_always(
+            client, websockets.InvalidStatusCode(500, Headers()))
+        monkeypatch.setattr(client, "_connect_and_serve", stub)
+        rc = asyncio.run(client.run())
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert len(calls) == 1
+        assert _is_non_hubbub_notice(out, free_port), out
+        assert out.strip().endswith("HTTP 500")
+
+    def test_invalid_upgrade_without_status_still_exits(
+            self, free_port, monkeypatch, capsys):
+        """An `InvalidHandshake` with neither `.status_code` nor `.response`
+        — a plain HTTP 200 without `Upgrade: websocket` produces this shape —
+        must not be swallowed: the transient arm is keyed on a status *in the
+        set*, not on the absence of one."""
+        exc = websockets.InvalidUpgrade("Upgrade", None)
+        assert not hasattr(exc, "status_code") and not hasattr(exc, "response")
+        client = self._client(free_port, 40006)
+        stub, calls = self._raise_always(client, exc)
+        monkeypatch.setattr(client, "_connect_and_serve", stub)
+        rc = asyncio.run(client.run())
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert len(calls) == 1
+        assert _is_non_hubbub_notice(out, free_port), out
+
+    # -- a persistent 5xx is a bounded, silent retry loop -------------------
+
+    def test_persistent_5xx_loops_within_backoff_max(
+            self, free_port, monkeypatch, capsys, caplog):
+        """AC3. A 5xx on every attempt keeps the monitor alive, doubling the
+        backoff up to `RECONNECT_BACKOFF_MAX_S` and holding there, printing
+        nothing on stdout and one `--verbose` log line per refusal. Asserts on
+        the *recorded* backoff values via a `random.uniform` stub, not on
+        elapsed time, so it is deterministic and fast. MAX is patched too:
+        against the real 4.0 s cap three attempts reach 0.02 and the bound
+        assertion could never fail."""
+        monkeypatch.setattr(shared, "RECONNECT_BACKOFF_MAX_S", 0.02)
+        recorded: list[float] = []
+
+        def fake_uniform(a, b):
+            # client.py calls uniform(-jitter, jitter) with
+            # jitter = backoff * RECONNECT_JITTER_FRAC, so b / FRAC is the
+            # backoff this iteration used. Zero jitter keeps the wait exact.
+            recorded.append(round(b / shared.RECONNECT_JITTER_FRAC, 6))
+            return 0.0
+
+        monkeypatch.setattr(client_mod.random, "uniform", fake_uniform)
+        # `verbose=True` only gates the log call; the level is set in main(),
+        # which this test bypasses, so caplog must set it.
+        caplog.set_level(logging.INFO, logger="hubbub.client")
+        client = self._client(free_port, 40007, verbose=True)
+        calls = []
+
+        async def stub(*_a, **_k):
+            calls.append(1)
+            if len(calls) == 4:
+                # Three refusals are enough to see MIN, doubled, held at MAX;
+                # the fourth attempt ends the test by stopping the client.
+                client.stop()
+                return
+            raise websockets.InvalidStatusCode(503, Headers())
+
+        monkeypatch.setattr(client, "_connect_and_serve", stub)
+        rc = asyncio.run(client.run())
+        out = capsys.readouterr().out
+        assert rc == 0, f"persistent 503 exited the monitor; stdout={out!r}"
+        assert len(calls) == 4
+        assert recorded == [0.01, 0.02, 0.02], recorded
+        assert out == "", f"a routine retry must not reach stdout: {out!r}"
+        refusals = [
+            r for r in caplog.record_tuples
+            if r == ("hubbub.client", logging.INFO,
+                     "handshake refused with HTTP 503; retrying")
+        ]
+        assert len(refusals) == 3, caplog.record_tuples
+
+    # -- end to end ---------------------------------------------------------
+
+    @pytest.mark.slow
+    async def test_handshake_in_flight_at_close_gets_503_and_monitor_reelects(
+            self, tmp_data_dir, free_port, monkeypatch):
+        """End to end, against a real `Server.close()`.
+
+        Pins two things: (a) this `websockets` still answers `HTTP/1.1 503`
+        to a handshake that was in flight when the server closed — the
+        premise of #39 — and (b) a registered monitor dropped by that same
+        close re-elects a server and stays on the bus rather than exiting 1.
+
+        What it deliberately does *not* pin: a real monitor caught inside the
+        503 window. From outside the process there is no way to hold a monitor
+        between TCP accept and its upgrade request (#30 reached the same
+        conclusion), so the monitor's reaction to the 503 itself is pinned
+        in-process by the unit tests above with `_connect_and_serve` stubbed.
+        Don't add a sleep-based version of that here; it would only pass by
+        luck.
+
+        Async on purpose: the in-process `Server` shares this test's loop, so
+        every wait is an `asyncio.wait_for`-bounded async poll. The sync
+        `waiting.wait_for` would block the loop the server needs.
+        """
+        shared.secure_dir(tmp_data_dir)
+        shared.ensure_token(shared.token_path())
+        # Hedge against a stall: server.py sets no `open_timeout`, so
+        # websockets' default of 10 s would hold `wait_closed()` on a handshake
+        # this test failed to complete. 5 s bounds a failed run; the window it
+        # bounds is two awaits in step 5, which take milliseconds.
+        monkeypatch.setattr(
+            websockets, "serve", functools.partial(websockets.serve, open_timeout=5))
+
+        held: dict = {}
+        opened = asyncio.Event()
+
+        async def hold() -> None:
+            # Runs between `_stop.wait()` returning and `server.close()`:
+            # the listener is still open, so the connect is accepted, and the
+            # request is deliberately *not* written yet — `handshake()` reads
+            # the whole request before its `is_serving()` check, so it must
+            # be read after the listener has closed to produce the 503.
+            if opened.is_set():
+                return  # idempotent: a re-entered seam must not wedge teardown
+            reader, writer = await asyncio.open_connection("127.0.0.1", free_port)
+            await asyncio.sleep(0)  # let the server-side accept run
+            held["reader"], held["writer"] = reader, writer
+            opened.set()
+
+        async def _until(pred, timeout=15.0):
+            async def _poll():
+                while not pred():
+                    await asyncio.sleep(0.05)
+            await asyncio.wait_for(_poll(), timeout)
+
+        srv = Server(host="127.0.0.1", port=free_port, idle_shutdown_minutes=10)
+        srv._before_close = hold
+        task = asyncio.create_task(srv.serve())
+        await srv.wait_ready()
+
+        pid_path = tmp_data_dir / f"server.{free_port}.pid"
+        session_file = tmp_data_dir / "clients" / "30002.session"
+        standin = proc = None
+        try:
+            # Identity stand-in. `verify_server_identity` requires
+            # `bin/server.py` in the pidfile pid's cmdline and pytest's never
+            # is, so a monitor subprocess could not otherwise join a Server
+            # that lives in the pytest process: it would print `server
+            # identity check failed` and stop. The stand-in satisfies the
+            # cmdline half; the `.meta` needs only pid/host/port. The old
+            # server's pid-guarded `_unlink_own_identity` then skips the
+            # pidfile, which is harmless — the successor overwrites it.
+            standin = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(120)", "bin/server.py"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            shared.write_server_identity(standin.pid, "127.0.0.1", free_port)
+
+            env = {
+                "PATH": os.environ["PATH"],
+                "PYTHONPATH": str(REPO),
+                "HUBBUB_DATA_DIR": str(tmp_data_dir),
+                "HUBBUB_NO_REEXEC": "1",
+                "HUBBUB_PPID_OVERRIDE": "30002",
+                **waiting.coverage_env(),
+            }
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(BIN_DIR / "client.py"),
+                 "--port", str(free_port), "--name", "alpha"],
+                env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            await _until(lambda: session_file.exists() and bool(srv._registry))
+            created_at0 = json.loads(session_file.read_text())["created_at"]
+
+            # Step 5: stop, and wait for the "listener is closed" signal. The
+            # registry empties when the monitor's 1001 close completes, and
+            # websockets only creates those 1001 tasks *after* closing the
+            # listener — so an empty registry means the listener is down.
+            # (Don't poll `is_server_up` for this: the monitor re-elects within
+            # ~0.25 s and the port comes straight back up.)
+            srv.stop()
+            await asyncio.wait_for(opened.wait(), 5)
+            await _until(lambda: not srv._registry)
+
+            writer = held["writer"]
+            writer.write(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            await writer.drain()
+            status = await asyncio.wait_for(held["reader"].readline(), 5)
+            assert status.startswith(b"HTTP/1.1 503"), status
+            await asyncio.wait_for(task, 5)
+
+            # Step 7: the monitor re-elected rather than exiting.
+            def _reelected() -> bool:
+                try:
+                    pid = int(pid_path.read_text().strip())
+                except (OSError, ValueError):
+                    return False
+                if pid in (os.getpid(), standin.pid):
+                    return False
+                return shared.safe_pid_alive(pid)
+
+            await _until(_reelected)
+            await _until(
+                lambda: json.loads(session_file.read_text())["created_at"] > created_at0)
+            assert proc.poll() is None, (
+                f"monitor exited {proc.returncode}: {proc.stderr.read()!r}")
+            # The in-process server is finished, so blocking the loop for up
+            # to 2 s here costs nothing. A notice line is the failure this
+            # test exists to catch.
+            line = waiting.read_line(proc, timeout=2)
+            assert line == "", f"monitor printed on stdout after the close: {line!r}"
+        finally:
+            w = held.get("writer")
+            if w is not None:
+                w.close()
+            if not task.done():
+                task.cancel()
+            if proc is not None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            # The re-elected server is detached; reap it by pidfile, never
+            # by `pkill -f`.
+            try:
+                pid = int(pid_path.read_text().strip())
+                if pid not in (os.getpid(), getattr(standin, "pid", None)):
+                    os.kill(pid, 9)
+            except (OSError, ValueError):
+                pass
+            if standin is not None:
+                standin.kill()
+                standin.wait()
+
+    @pytest.mark.slow
+    def test_monitor_against_plain_http_server_exits_1(self, tmp_data_dir, free_port):
+        """The negative end to end: a foreign HTTP service that passed the
+        identity check (its argv carries `bin/server.py`) and answers 404
+        still gets the notice and exit 1. Pins that the loosening is confined
+        to 502/503/504 against a real listener, not just a stub."""
+        env = {
+            "PATH": os.environ["PATH"],
+            "PYTHONPATH": str(REPO),
+            "HUBBUB_DATA_DIR": str(tmp_data_dir),
+            "HUBBUB_NO_REEXEC": "1",
+            **waiting.coverage_env(),
+        }
+        http_proc = subprocess.Popen(
+            [sys.executable, "-c", _HTTP_404_ONE_LINER, str(free_port), "bin/server.py"],
+            env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        proc = None
+        try:
+            assert _wait_for(lambda: spawn.is_server_up("127.0.0.1", free_port)), (
+                "the plain HTTP server never began listening")
+            shared.secure_dir(tmp_data_dir)
+            shared.write_server_identity(http_proc.pid, "127.0.0.1", free_port)
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(BIN_DIR / "client.py"),
+                 "--port", str(free_port), "--name", "beta"],
+                env={**env, "HUBBUB_PPID_OVERRIDE": "30003"},
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            line = waiting.read_line(proc)
+            assert _is_non_hubbub_notice(line, free_port), (
+                f"expected the non-hubbub notice, got {line!r}; "
+                f"stderr={proc.stderr.read() if proc.poll() is not None else ''!r}")
+            assert line.endswith(": server rejected WebSocket connection: HTTP 404"), line
+            assert proc.wait(timeout=5) == 1
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            http_proc.kill()
+            http_proc.wait()

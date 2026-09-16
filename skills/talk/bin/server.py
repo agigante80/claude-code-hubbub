@@ -34,7 +34,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -82,6 +82,12 @@ class Server:
         # (control role) can't bypass by opening fresh connections per send.
         self._broadcast_windows: dict[str, deque] = {}
         self._stop = asyncio.Event()
+        # Test-only seam (#30, pulled forward by #39): awaited in serve()'s
+        # finally between `_stop.wait()` returning and `server.close()`. From
+        # outside the process there is no way to hold a connection in that
+        # gap — the 503-mid-handshake window — so the hook *is* the gap.
+        # None in production; no behaviour when unset.
+        self._before_close: Optional[Callable[[], Awaitable[None]]] = None
         self._ready = asyncio.Event()
         self._last_activity = time.monotonic()
 
@@ -124,6 +130,8 @@ class Server:
             await self._stop.wait()
         finally:
             idle_task.cancel()
+            if self._before_close is not None:
+                await self._before_close()
             server.close()
             await server.wait_closed()
             # Only remove the pidfile/meta if they still belong to this server
