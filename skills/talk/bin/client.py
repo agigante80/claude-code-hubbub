@@ -249,6 +249,24 @@ def _print_unless_auto(line: str, from_monitor: bool) -> None:
         _print_line(line)
 
 
+def _handshake_status(e: BaseException) -> Optional[int]:
+    """The HTTP status a WebSocket upgrade was refused with, or None.
+
+    Under the pinned websockets (`>=12,<14`, legacy client) a non-101 status
+    raises `InvalidStatusCode` with `.status_code`. websockets 14+ raises
+    `InvalidStatus` with the status on `.response.status_code` and no
+    `.status_code`; reading both keeps the transient arm in `Client.run()`
+    working across a pin bump instead of silently reopening #39. An
+    `InvalidHandshake` with neither (`InvalidUpgrade`, `InvalidMessage`: the
+    shape a plain HTTP server produces) yields None, and None is never
+    transient.
+    """
+    status = getattr(e, "status_code", None)
+    if status is None:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
 class Client:
     def __init__(
         self,
@@ -338,10 +356,28 @@ class Client:
                     if self.verbose:
                         log.info("connect failed: %s", e)
                 except websockets.InvalidHandshake as e:
-                    _print_line(
-                        f"[hubbub] connected to a non-hubbub "
-                        f"service on port {self.port}: {e}")
-                    return 1
+                    # A 502/503/504 here is our own server going away, not a
+                    # foreign service (#39): websockets closes the listener
+                    # before it sends 1001 to OPEN connections, and a monitor
+                    # still inside the upgrade handshake at that moment is
+                    # answered 503 instead. The guard is the *pre-connect*
+                    # `verify_server_identity` at the top of
+                    # `_connect_and_serve`, which passed for this attempt and
+                    # runs again before the retry. Don't add a re-check here:
+                    # by the time the 503 arrives the old server may already
+                    # have unlinked its pidfile, so a post-5xx check would fail
+                    # and stop the monitor — the bug itself with a different
+                    # notice. Mirrors the OSError arm above: nothing on stdout,
+                    # a log line under --verbose, back off, re-elect.
+                    status = _handshake_status(e)
+                    if status in shared.TRANSIENT_HANDSHAKE_STATUSES:
+                        if self.verbose:
+                            log.info("handshake refused with HTTP %s; retrying", status)
+                    else:
+                        _print_line(
+                            f"[hubbub] connected to a non-hubbub "
+                            f"service on port {self.port}: {e}")
+                        return 1
                 except websockets.ConnectionClosed:
                     pass
                 finally:

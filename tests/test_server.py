@@ -1503,3 +1503,44 @@ class TestSessionIdValidation:
             assert shared.validate_session_id(welcome["session_id"])
         finally:
             await ws.close()
+
+
+class TestBeforeCloseSeam:
+    """`Server._before_close` (#30, pulled forward by #39) is a test-only hook
+    awaited in `serve()`'s `finally` between `_stop.wait()` returning and
+    `server.close()`. From outside the process there is no way to hold a
+    connection in that gap, so the hook *is* the gap. `None` in production."""
+
+    async def test_seam_unset_changes_nothing(self, tmp_data_dir, free_port):
+        shared.secure_dir(tmp_data_dir)
+        shared.ensure_token(shared.token_path())
+        srv = Server(host="127.0.0.1", port=free_port, idle_shutdown_minutes=10)
+        assert srv._before_close is None
+        task = asyncio.create_task(srv.serve())
+        await srv.wait_ready()
+        srv.stop()
+        await asyncio.wait_for(task, 2.0)
+        assert not shared.pidfile_path(free_port, "127.0.0.1").exists()
+        assert not shared.pidfile_meta_path(free_port, "127.0.0.1").exists()
+
+    async def test_seam_runs_after_stop_before_close(self, tmp_data_dir, free_port):
+        """The probe recorded inside the seam is True: the listener was still
+        open when it ran, i.e. it ran before `server.close()`, and it ran at
+        all only because `stop()` fired."""
+        shared.secure_dir(tmp_data_dir)
+        shared.ensure_token(shared.token_path())
+        srv = Server(host="127.0.0.1", port=free_port, idle_shutdown_minutes=10)
+        seen: dict = {}
+
+        async def seam() -> None:
+            seen["stopped"] = srv._stop.is_set()
+            seen["listening"] = spawn.is_server_up("127.0.0.1", free_port, timeout=0.2)
+
+        srv._before_close = seam
+        task = asyncio.create_task(srv.serve())
+        await srv.wait_ready()
+        assert seen == {}, "the seam must not run before stop()"
+        srv.stop()
+        await asyncio.wait_for(task, 2.0)
+        assert seen == {"stopped": True, "listening": True}, seen
+        assert not shared.pidfile_path(free_port, "127.0.0.1").exists()
