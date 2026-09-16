@@ -92,7 +92,7 @@ and let a new-path client elect a fresh one.
 
 This is a **maintained fork** of
 [yilunzhang/claude-code-inter-session](https://github.com/yilunzhang/claude-code-inter-session).
-Upstream last shipped `0.1.3` on 2026-05-24. This fork is at **`0.2.0`**:
+Upstream last shipped `0.1.3` on 2026-05-24. This fork is at **`0.3.0`**:
 everything below was developed here on top of that release and offered
 back upstream as pull requests, which are still open — so for now this
 fork is where the fixes live.
