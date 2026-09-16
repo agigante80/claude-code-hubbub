@@ -21,19 +21,37 @@ DEFAULT_PORT = 9473
 WS_FRAME_CAP = 16 * 1024 * 1024
 TEXT_CAP = 10 * 1024 * 1024
 BROADCAST_TEXT_CAP = 256 * 1024
-# Body cap for the stdout notification line that Claude Code's monitor
-# delivers to the receiving LLM. Empirically (issue #2), CC clips each
-# notification at ~512 chars total, so above this budget the truncated=
-# marker and cont-pointer line never reach the LLM. 400 leaves room for
-# our prefix (`[hubbub msg=… from="…" sid=… "…" truncated=N] `)
-# under the 512 limit in typical cases; very long name+label combos may
-# still clip, but the cont-pointer line is short and always fits, so the
-# LLM still gets the messages.log path for full content.
+# What Claude Code keeps of each monitor stdout line before it reaches the
+# receiving LLM. Measured, not guessed (#38, 2026-09-14, Claude Code 2.1.270,
+# via the `Monitor` tool): a script printed three 800-code-point ruler lines
+# with position sentinels, 1.5 s apart — ASCII, U+00E9 (2 UTF-8 bytes, 1
+# UTF-16 unit) and U+1F600 (4 UTF-8 bytes, 2 UTF-16 units). ASCII and U+00E9
+# both arrived cut at 500 code points; U+1F600 at ~257 code points with a
+# lone U+FFFD at the cut. So the unit is UTF-16 code units (JavaScript
+# `String.length`) — not 512, not UTF-8 bytes, not code points — Claude Code
+# appends its own `...(truncated)`, and it can split a surrogate pair. The
+# three lines arrived as three notifications, so lines 1.5 s apart are not
+# batched; whether a header line and the `cont` line printed microseconds
+# after it batch into one notification is unmeasured and tracked in #43.
 #
-# The `sid=` fingerprint (fork #7) costs ~13 characters of that margin.
-# Deliberately not compensated by lowering the cap: a truncated body has a
-# `cont` pointer to the full text in messages.log, whereas a misattributed
-# sender has no recovery at all.
+# `utf16_len` is the measure for every comparison against this; `len()`
+# stays for code-point contracts (LABEL_MAX_CP, TEXT_CAP, `truncated=N`).
+NOTIFICATION_CLIP = 500
+# Body cap for that line, in the same unit. Commit 53548b2 set 400 against a
+# guessed 512 and accepted that "very long name+label combos may still
+# clip"; the header is not fixed-width (40-char name, 60-code-point label of
+# up to 120 units, `sid=` from fork #7, `msg_id`, `truncated=<8 digits>`), so
+# the worst case measured 632 units (before #10 shortened the prefix by
+# 7). The body is therefore capped at
+# `min(STDOUT_CAP, NOTIFICATION_CLIP - utf16_len(header))` in
+# `client._format_msg`: 400 for the typical sender, never fewer than 275 (500
+# minus the 225-unit maximal header). The body shrinks and the header never
+# does — it is the SEC-002 authority marker, and it is what the reaction
+# policy parses.
+#
+# Deliberately not lowered to absorb the `sid=` fingerprint or the worst-case
+# header: a truncated body has a `cont` pointer to the full text in
+# messages.log, whereas a misattributed sender has no recovery at all.
 STDOUT_CAP = 400
 PING_INTERVAL_S = 15
 RECONNECT_BACKOFF_MIN_S = 0.25
@@ -958,11 +976,40 @@ def sanitize_label_for_display(s: str) -> str:
     return "".join(_LABEL_STRUCTURAL.get(ch, ch) for ch in s)
 
 
+def utf16_len(s: str) -> int:
+    """Length in UTF-16 code units — JavaScript `String.length`, the unit
+    Claude Code clips notifications in (NOTIFICATION_CLIP). A code point above
+    U+FFFF costs two.
+
+    Non-raising by construction: `from_name` and `msg_id` reach `_format_msg`
+    unsanitised, and `json.loads('"\\\\ud83d"')` yields a lone surrogate that a
+    plain `encode("utf-16-le")` refuses. `surrogatepass` counts it as one
+    unit, which is also what JavaScript does, so a display budget can never
+    become a crashed monitor."""
+    return len(s.encode("utf-16-le", errors="surrogatepass")) // 2
+
+
 def truncate_for_stdout(s: str, cap: int = STDOUT_CAP) -> tuple[str, bool, int]:
+    """Cut `s` to at most `cap` UTF-16 code units, never inside a code point.
+
+    Returns `(text, was_truncated, full_len)`; `full_len` is code points,
+    because it is what `truncated=N` reports on the wire. The cap is in UTF-16
+    units because that is what the receiving side counts: a cut measured in
+    code points let a body end one unit over budget, and Claude Code's clip
+    then split the surrogate pair and showed U+FFFD. If the next code point
+    would not fit whole, the cut lands before it."""
     full_len = len(s)
-    if full_len <= cap:
+    # Every code point is at least one unit, so `len(s) > cap` cannot fit; the
+    # encode is only paid for strings short enough that it might.
+    if full_len <= cap and utf16_len(s) <= cap:
         return s, False, full_len
-    return s[:cap], True, full_len
+    units = cut = 0
+    for ch in s:
+        units += 2 if ord(ch) > 0xFFFF else 1
+        if units > cap:
+            break
+        cut += 1
+    return s[:cut], True, full_len
 
 
 def ensure_token(path: Path) -> str:

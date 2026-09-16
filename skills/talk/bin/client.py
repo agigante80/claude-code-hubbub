@@ -71,9 +71,16 @@ def _print_line(line: str) -> None:
     sys.stdout.flush()
 
 
-def _format_msg(msg: dict) -> str:
+def _format_msg(msg: dict) -> tuple[str, bool, int]:
+    """Render one `msg` payload as the single stdout notification line.
+
+    Returns `(line, was_truncated, full_len)`; the read loop prints the `cont`
+    pointer from the same `was_truncated` that chose the header, so the two
+    cannot disagree (#38 — they did, when the loop truncated a second time at
+    the default cap and a 380-char body from a maximal sender printed
+    `truncated=380]` with no `cont` line)."""
     sanitized = shared.sanitize_for_stdout(msg.get("text", ""))
-    truncated, was_truncated, full_len = shared.truncate_for_stdout(sanitized)
+    full_len = len(sanitized)
     # NOT a bare slice of `from`. That is peer-chosen and was only
     # type-checked, so eight characters of it were enough to inject a newline
     # and forge a second notification line beginning with an authoritative
@@ -105,24 +112,41 @@ def _format_msg(msg: dict) -> str:
     # a peer still chooses its own session_id, so this distinguishes sessions,
     # it does not prove who they are.
     #
-    # Costs ~13 characters of the STDOUT_CAP budget (see shared.STDOUT_CAP on
-    # why that budget is tight). Judged worth it: a truncated body has a
-    # `cont` pointer to the full text, a misattributed sender has nothing.
+    # Costs ~13 units of the body budget below. Judged worth it: a truncated
+    # body has a `cont` pointer to the full text, a misattributed sender has
+    # nothing.
     sid_part = f" sid={from_sid}" if from_sid else ""
+    # The body budget is what the header leaves under the clip (#38). Claude
+    # Code keeps NOTIFICATION_CLIP UTF-16 units of the line; the header is not
+    # fixed-width (name, label, `sid=`, `msg_id`, `truncated=N`), so it is
+    # rendered first — in its truncated form, since that is the one that has
+    # to fit — and measured after the sanitizers, never on the raw fields. The
+    # body shrinks; the header never does. It is the SEC-002 authority marker
+    # the reaction policy parses, and its shape is frozen through the #10
+    # rename. Rendering with the marker means a body that would have fit only
+    # without it is over-truncated by the marker's width, at most 19 units,
+    # deterministically. `max(0, …)` guards a direct caller passing an
+    # oversized `from_name`; server-validated fields cannot get there.
+    #
     # was "[inter-session …]" through 0.2.x (step 2 of #10). Step 3, #41,
     # drops the legacy spelling from the reaction policy.
+    truncated_prefix = (f'[hubbub msg={msg_id} from="{from_name}"{sid_part}'
+                        f'{label_part} truncated={full_len}]')
+    budget = min(shared.STDOUT_CAP,
+                 max(0, shared.NOTIFICATION_CLIP - shared.utf16_len(truncated_prefix + " ")))
+    body, was_truncated, _ = shared.truncate_for_stdout(sanitized, cap=budget)
     if was_truncated:
-        prefix = (f'[hubbub msg={msg_id} from="{from_name}"{sid_part}'
-                  f'{label_part} truncated={full_len}]')
+        prefix = truncated_prefix
     else:
         prefix = (f'[hubbub msg={msg_id} from="{from_name}"{sid_part}'
                   f'{label_part}]')
-    return f"{prefix} {truncated}"
+    return f"{prefix} {body}", was_truncated, full_len
 
 
 def _format_truncation_pointer(msg_id: str, full_len: int) -> str:
+    # `full_len` is `len(str)`: code points, the same count as `truncated=N`.
     log_path = shared.messages_log_path()
-    return f"[hubbub msg={msg_id} cont] full text {full_len} bytes at {log_path}"
+    return f"[hubbub msg={msg_id} cont] full text {full_len} chars at {log_path}"
 
 
 def _write_session_state(ppid: int, state: dict) -> None:
@@ -462,10 +486,11 @@ class Client:
                         continue
                     op = payload.get("op")
                     if op == "msg":
-                        line = _format_msg(payload)
+                        # One render decides both lines. A second truncation
+                        # here at the default cap disagreed with the
+                        # header-aware one above (#38).
+                        line, was_truncated, full_len = _format_msg(payload)
                         _print_line(line)
-                        sanitized = shared.sanitize_for_stdout(payload.get("text", ""))
-                        truncated, was_truncated, full_len = shared.truncate_for_stdout(sanitized)
                         if was_truncated:
                             _print_line(_format_truncation_pointer(payload.get("msg_id", ""), full_len))
                     elif op in ("peer_joined", "peer_left", "renamed", "relabeled"):
