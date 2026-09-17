@@ -301,7 +301,7 @@ imposes is:
 
 ## Tests
 
-The suite is ~NTESTS tests, NSLOW of them `@pytest.mark.slow`, plus one
+The suite is 639 collected — 638 that run, 85 of them `@pytest.mark.slow`, plus one
 deliberate `xfail(strict=True)` pointing at #53. Async
 tests need no marker (`asyncio_mode = auto`); a new marker must be registered
 in `pytest.ini` (`--strict-markers`).

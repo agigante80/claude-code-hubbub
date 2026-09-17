@@ -524,13 +524,13 @@ real-world failures that motivated the rule.
 
 ## Development
 
-TDD throughout. Test runner: `pytest` + `pytest-asyncio`. 582 tests, no
+TDD throughout. Test runner: `pytest` + `pytest-asyncio`. 638 tests, no
 skips — a skipped test fails the run.
 
 ```bash
 make              # list every target (the default)
 make test         # full suite — auto-bootstraps .venv on first run
-make test-fast    # skip the NSLOW @pytest.mark.slow tests (-m "not slow")
+make test-fast    # skip the 85 @pytest.mark.slow tests (-m "not slow")
 make test-system  # same suite under the SYSTEM python3
 make test-both    # both interpreters, sequentially — use before shipping
 make coverage     # suite under coverage; fails below the 80% floor
