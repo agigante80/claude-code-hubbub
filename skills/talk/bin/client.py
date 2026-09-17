@@ -101,8 +101,8 @@ def _format_msg(msg: dict) -> tuple[str, bool, int]:
     msg_id = msg.get("msg_id", "")
     label_part = f' "{from_label}"' if from_label else ""
     # `sid=` is the session fingerprint (fork #7, evidenced by #9). A name is
-    # self-asserted and reused: on this machine `[redacted]` has been held by 7
-    # distinct session_ids and `[redacted]` by 6, so "send to [redacted]" has meant six
+    # self-asserted and reused: on this machine `laptop` has been held by 7
+    # distinct session_ids and `worker` by 6, so "send to worker" has meant six
     # different conversations. Without this the receiver cannot tell that the
     # peer it answered yesterday is a different session today, and there is no
     # signal anywhere that anything changed.

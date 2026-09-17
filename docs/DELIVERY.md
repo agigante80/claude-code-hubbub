@@ -55,7 +55,7 @@ A sender that addresses a name nobody holds gets an error frame back.
   name the glob never listed, so a record there is missed by that one
   expansion. Retrying resolves it.
 - **Names are not stable identities.** A name belongs to whoever holds
-  it *now*. On the machine studied, `[redacted]` had been held by six
+  it *now*. On the machine studied, `worker` had been held by six
   different `session_id`s since 2026-07-12 as sessions restarted. A name
   you were given yesterday may address a different conversation today;
   `session_id` is the stable handle.
@@ -71,15 +71,15 @@ the same project routinely has a live session in *each*:
 
 | Transport | Roster entry | Process |
 | :-------- | :----------- | :------ |
-| this bus  | `[redacted]-social` | `claude --remote-control [redacted]-social` |
-| harness   | `[redacted]-social-b1 [3c9090]` | interactive session in tmux `cc-[redacted]-social` |
+| this bus  | `worker-social` | `claude --remote-control worker-social` |
+| harness   | `worker-social-b1 [3c9090]` | interactive session in tmux `cc-worker-social` |
 
 Different sessions. Different conversations. Near-identical names.
 
 **Incident 1 (2026-08-14, reproduced end to end).** A session received a
 question over the bus at 12:18:30, had it in context at 12:18:31, and
 answered at 12:20:27 — using the harness's `SendMessage`, addressed to
-`[redacted]-social-b1 [3c9090]`. The bus peer that asked never got a reply.
+`worker-social-b1 [3c9090]`. The bus peer that asked never got a reply.
 Neither side saw an error. This is what the
 [reply-on-the-same-transport rule](../skills/talk/SKILL.md)
 exists to prevent, and `tests/test_reaction_policy.py` keeps that rule

@@ -253,11 +253,11 @@ class TestFormatMsg:
 
     def test_includes_the_session_fingerprint(self):
         """fork #7/#9. A name is self-asserted and reused — on this machine
-        `[redacted]` has been 7 distinct session_ids and `[redacted]` 6, so "send to
-        [redacted]" has meant six different conversations. `sid=` is what lets a
+        `laptop` has been 7 distinct session_ids and `worker` 6, so "send to
+        worker" has meant six different conversations. `sid=` is what lets a
         receiver notice the peer changed."""
         msg = {"msg_id": "x", "from": "7a2016e4-1111-2222-3333-444455556666",
-               "from_name": "[redacted]", "from_label": "", "text": "hi"}
+               "from_name": "worker", "from_label": "", "text": "hi"}
         out, _, _ = client_mod._format_msg(msg)
         assert "sid=7a2016e4" in out
         # Eight characters, matching list.py's ID column so the two can be

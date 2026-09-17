@@ -483,8 +483,8 @@ that the receiving agent read or acted on the message:
   paying attention.
 - A `name` belongs to whoever holds it *now*; `session_id` is the stable
   handle across restarts. That distinction is not academic: on one machine
-  `[redacted]` has been held by 7 different sessions and `[redacted]` by 6, so
-  "reply to [redacted]" has meant six different conversations over time.
+  `laptop` has been held by 7 different sessions and `worker` by 6, so
+  "reply to worker" has meant six different conversations over time.
 - Because of that, every notification carries **`sid=`** — a prefix of the
   sender's `session_id`, matching the ID column in `list`, and usable with
   `send --to <short id>`. **If you resume an exchange and the `sid` has

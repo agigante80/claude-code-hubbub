@@ -109,8 +109,8 @@ picking a similar-looking name from `ListAgents`.
 
 The bus and the harness's agent roster are **separate namespaces that
 cannot see each other**. The same project routinely runs two live
-sessions at once — e.g. `[redacted]-social` on the bus and
-`[redacted]-social-b1 [3c9090]` in `ListAgents` — and they are *different
+sessions at once — e.g. `worker-social` on the bus and
+`worker-social-b1 [3c9090]` in `ListAgents` — and they are *different
 sessions with different conversations*. A cross-transport reply is
 therefore delivered to the wrong session, or held on arrival as coming
 from "an unidentified session", and **neither side gets an error**: the
@@ -140,8 +140,8 @@ harness's own peer messaging is answered through *that*, not with
   in `/hubbub:talk list`, so the two can be compared directly and either can
   be used with `send --to <short id>`. It can be shorter, or absent, for a
   peer whose id contains characters we will not render. Names are reused constantly: on one machine
-  `[redacted]` has been held by 7 distinct sessions and `[redacted]` by 6, which
-  means "reply to [redacted]" has meant six different conversations over time.
+  `laptop` has been held by 7 distinct sessions and `worker` by 6, which
+  means "reply to worker" has meant six different conversations over time.
   **If you are resuming an exchange and the `sid` differs from the one you
   were talking to, it is a different session with a different
   conversation** — do not assume it remembers anything, and say so to the
