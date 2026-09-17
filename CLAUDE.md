@@ -94,7 +94,7 @@ fallback). System Python is never touched.
 make                                         # help; the default goal
 make test                                    # full suite (~120 s), .venv
 make coverage                                # suite under coverage; gate at 80%
-make test-fast                               # skip the NSLOW @pytest.mark.slow tests
+make test-fast                               # skip the 85 @pytest.mark.slow tests
 make test-system                             # same suite under the SYSTEM python3
 make test-both                               # both interpreters, sequentially
 make probe-cc                                # real `claude -p` probe; SPENDS CREDENTIAL
@@ -195,8 +195,8 @@ their own session isn't on.
 
 ### Suite status
 
-Green as of 2026-09-17: `NTESTS passed, 1 xfailed` on Linux 7.0 / CPython
-3.12 (`make test-system`), NSLOW of them `@pytest.mark.slow`. The growth from
+Green as of 2026-09-17: `638 passed, 1 xfailed` on Linux 7.0 / CPython
+3.12 (`make test-system`), 85 of them `@pytest.mark.slow`. The growth from
 560/28 is #33's `tests/test_error_codes.py` and #34's `tests/test_cc_harness.py`.
 The one XFAIL is
 `TestPluginRootSubstitution::test_shipped_root_with_a_space_registers`,

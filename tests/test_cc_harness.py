@@ -628,7 +628,11 @@ class TestSameCwd:
                 "[hubbub] name 'proj-a' taken after 0 retries; "
                 "run /hubbub:talk connect <other-name>"
             ), line
-            assert proc_b.wait(timeout=waiting.DEFAULT_TIMEOUT) == 0
+            # Exit 1, not 0: #60 gave a terminal NAME_TAKEN an `_exit_code`
+            # because a clean exit reported a successful shutdown for a
+            # session that never joined the bus. The duplicate-monitor arm
+            # still exits 0 and is pinned by its own test.
+            assert proc_b.wait(timeout=waiting.DEFAULT_TIMEOUT) == 1
             assert not _session_path(tmp_data_dir, 50002).exists()
         finally:
             _reap(proc_a, proc_b)
