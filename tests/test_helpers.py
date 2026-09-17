@@ -153,7 +153,13 @@ class TestSendHelper:
                     p.kill()
             _kill_server()
 
-    def test_send_unknown_peer(self, tmp_data_dir, free_port):
+    def test_unknown_peer_via_cli(self, tmp_data_dir, free_port):
+        """Renamed from `test_send_unknown_peer` (#33); assertions unchanged.
+
+        The `_via_cli` suffix is what `tests/test_shared.py::TestErrorCodeMatrix`
+        anchors `UNKNOWN_PEER` on, and it is honest: this is the real `send.py`
+        against a real elected server.
+        """
         ppid = 20003
         listener = _spawn_listener(free_port, "alpha", tmp_data_dir, ppid)
         try:

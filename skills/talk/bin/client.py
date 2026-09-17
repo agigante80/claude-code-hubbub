@@ -293,6 +293,10 @@ class Client:
         self.session_id = str(uuid.uuid4())
         self.nonce = secrets.token_urlsafe(16)
         self._stop = asyncio.Event()
+        # What `run()` returns once the loop exits. `_stop` alone cannot carry
+        # it: a SIGTERM and an exhausted name-collision budget both set it, and
+        # only the second is a session that never joined the bus (#33).
+        self._exit_code = 0
         self._lock_fd: Optional[int] = None
         self._max_collision_retries = max_collision_retries
         self._collision_retries = 0
@@ -391,7 +395,7 @@ class Client:
                 except asyncio.TimeoutError:
                     pass
                 backoff = min(backoff * 2, shared.RECONNECT_BACKOFF_MAX_S)
-            return 0
+            return self._exit_code
         finally:
             if self._lock_fd is not None:
                 try:
@@ -479,6 +483,12 @@ class Client:
                         f"{self._collision_retries} retries; "
                         f"run /hubbub:talk connect <other-name>"
                     )
+                    # Non-zero: this session is not on the bus and never will
+                    # be without a new name, so exiting 0 would report a clean
+                    # shutdown to the one surface that could react (#33). The
+                    # duplicate-monitor arm above stays 0 — that session *is*
+                    # connected.
+                    self._exit_code = 1
                     self._stop.set()
                     return
                 # `unauthorized` here is the documented symptom of a forked

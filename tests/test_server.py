@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
+from collections import Counter
 
 import pytest
 import websockets
@@ -1454,6 +1456,258 @@ class TestConcurrentRegistration:
             )
         finally:
             await ws.close()
+
+
+def _prefill_live_log(path, nbytes: int) -> int:
+    """Fill `path` with exactly `nbytes` of valid JSONL records and return
+    how many records that took. Fixed-shape records are written while two
+    more still fit; the last record's `text` is padded so the file lands on
+    the byte. The ids are `pre…`, which no server-minted 8-hex `msg_id` can
+    collide with."""
+    def line(i: int, text: str) -> str:
+        return json.dumps({
+            "ts": "2026-09-16T00:00:00.000000+00:00", "msg_id": f"pre{i:05d}",
+            "kind": "direct", "from": "prefill", "from_name": "prefill",
+            "from_label": "", "to": "prefill", "to_session_id": "prefill",
+            "text": text,
+        }) + "\n"
+    unit = len(line(0, "x").encode())
+    assert nbytes >= unit
+    lines, total = [], 0
+    while total + 2 * unit <= nbytes:
+        lines.append(line(len(lines), "x"))
+        total += unit
+    # Remaining is in [unit, 2 * unit); pad the last text to close the gap.
+    empty = len(line(len(lines), "").encode())
+    lines.append(line(len(lines), "x" * (nbytes - total - empty)))
+    path.write_text("".join(lines), encoding="utf-8")
+    assert path.stat().st_size == nbytes
+    return len(lines)
+
+
+def _read_records(path):
+    """Every line of `path` as a parsed record — `json.loads` failing here is
+    the "split record" outcome the class pins against."""
+    text = path.read_text(encoding="utf-8")
+    assert text.endswith("\n"), f"{path.name} does not end on a record boundary"
+    return [json.loads(ln) for ln in text.splitlines()]
+
+
+def _logged_ids(data_dir, backups=shared.MESSAGES_LOG_BACKUPS):
+    """`msg_id`s across `messages.log` and every backup that exists, as a
+    list so a duplicate shows up in the Counter rather than collapsing."""
+    ids = []
+    live = data_dir / "messages.log"
+    for p in [live] + [data_dir / f"messages.log.{i}" for i in range(1, backups + 1)]:
+        if p.exists():
+            ids.extend(r["msg_id"] for r in _read_records(p))
+    return ids
+
+
+class TestLogRotationUnderLoad:
+    """#30, the residue of #20. `messages.log` is the receiver's source of
+    truth for a truncated message — `SKILL.md` "Truncated messages" greps
+    `messages.log*` by `msg_id` — so a record that is lost, written twice or
+    split across a rotation shows the agent the wrong text or nothing.
+
+    The property under test is structural, not a timing one: `_log_message`
+    is a plain `def` on the single event loop with no `await` between
+    `rotate_log_if_needed` and the append, so N senders under one
+    `asyncio.gather` are N sequential rotate-then-append pairs. The burst
+    tests pass today by design; they guard against a future non-synchronous
+    writer (a thread pool, `aiofiles`, an `await` between rotate and append).
+    `test_record_that_crosses_the_cap_lands_whole_in_the_live_file` is the
+    one that discriminates rotate-*before*-append from rotate-after.
+
+    What the writer cannot guarantee is the reader. The shell expands
+    `messages.log*` ascending before `grep` opens anything, and rotation
+    shifts records ascending too (`.4`→`.5`, …, live→`.1`), so with all five
+    backups present a rotation between expand and open cannot hide a record:
+    a member can vanish (`.5` unlinked → `No such file` on stderr) or be read
+    under two names (`head -1` absorbs the duplicate). With *fewer* than five
+    backups the highest one shifts to a name the glob never listed, so a
+    record there can be missed once — retry-safe, and documented in
+    `docs/DELIVERY.md`. That is `SKILL.md` prose, not code here, so it is
+    stated once, in this docstring, and not re-discovered.
+
+    Sizing. A burst record — `_hello`'s default 36-char session ids, names
+    `peer-N`, a 6-char body — measures 263-265 bytes (256-258 when `ts`
+    happens to carry a zero microsecond field, which `isoformat` omits).
+    With the cap at 16384 the 240-record burst rotates before records
+    63-66, 125-131 and 187-196, and a fourth rotation would need 249-261
+    records: exactly three today, whatever the timestamps. The assertions
+    leave room for the record to grow: `.1` and `.3` exist with a 44-record
+    margin, `.5` (311+ records) cannot, with 71; `.4` is deliberately not
+    asserted either way, since its margin is 9 records. The boundary tests
+    use 4096 and pre-fill the live file to exactly that many bytes, so the
+    first send is the crossing record by construction.
+
+    Adjacent and out of scope: a 10 MB record is several `write(2)` calls
+    through the buffered file, so a server *crash* mid-record leaves a
+    partial last line. Not a concurrency question.
+    """
+
+    N = 12
+    K = 20
+
+    async def _register(self, port, token, n):
+        conns = [await _connect(port) for _ in range(n)]
+        results = await asyncio.gather(*[
+            _hello(ws, token, name=f"peer-{i}") for i, ws in enumerate(conns)
+        ])
+        for _sid, welcome in results:
+            assert welcome["op"] == "welcome", welcome
+        return conns
+
+    async def _send_k(self, ws, i, n, k):
+        for j in range(k):
+            await _send_op(ws, "send", to=f"peer-{(i + 1) % n}", text=f"{i:02d}:{j:03d}")
+
+    async def _drain_msgs(self, ws, k):
+        ids = []
+        for _ in range(k):
+            frame = await _recv_until(ws, "msg")
+            assert frame["op"] == "msg", frame
+            ids.append(frame["msg_id"])
+        return ids
+
+    async def _burst(self, port, token, n, k):
+        """Register n agents, have each send k direct messages to its
+        neighbour under one gather while every receiver drains its k `msg`
+        frames, and return the delivered `msg_id`s."""
+        conns = await self._register(port, token, n)
+        try:
+            results = await asyncio.gather(
+                *[self._send_k(ws, i, n, k) for i, ws in enumerate(conns)],
+                *[self._drain_msgs(ws, k) for ws in conns],
+            )
+        finally:
+            for ws in conns:
+                await ws.close()
+        delivered = [mid for r in results[n:] for mid in r]
+        assert len(delivered) == n * k
+        return delivered
+
+    async def test_burst_across_rotations_logs_every_msg_id_exactly_once(
+            self, running_server, tmp_data_dir, monkeypatch, caplog):
+        """12 senders x 20 sends at a 16384-byte cap: three rotations, and
+        every delivered `msg_id` is logged exactly once across
+        `messages.log*` — no duplicate, no loss, every line whole. `.5` is
+        asserted absent so this is a claim about rotation, not a coincidence
+        of a lost tail."""
+        srv, port, token = running_server
+        monkeypatch.setattr(shared, "MESSAGES_LOG_MAX_BYTES", 16384)
+        with caplog.at_level(logging.WARNING, logger="hubbub.server"):
+            delivered = await self._burst(port, token, self.N, self.K)
+        logged = _logged_ids(tmp_data_dir)
+        assert Counter(logged) == Counter(delivered)
+        assert set(Counter(logged).values()) == {1}
+        assert (tmp_data_dir / "messages.log.1").exists()
+        assert (tmp_data_dir / "messages.log.3").exists()
+        assert not (tmp_data_dir / "messages.log.5").exists()
+        assert not [r for r in caplog.records
+                    if r.name == "hubbub.server" and r.levelno >= logging.WARNING]
+
+    async def test_burst_past_the_retention_window_drops_whole_records_only(
+            self, running_server, tmp_data_dir, monkeypatch):
+        """The retention bound, as a true negative: the same burst at a
+        4096-byte cap rotates ~15 times, so records *are* dropped — whole,
+        from the far end, never partially, and never twice."""
+        srv, port, token = running_server
+        monkeypatch.setattr(shared, "MESSAGES_LOG_MAX_BYTES", 4096)
+        delivered = await self._burst(port, token, self.N, self.K)
+        logged = _logged_ids(tmp_data_dir)
+        assert (tmp_data_dir / "messages.log.5").exists()
+        assert not (tmp_data_dir / "messages.log.6").exists()
+        assert set(Counter(logged).values()) == {1}
+        assert set(logged) < set(delivered)
+
+    async def test_rotation_forced_mid_burst_loses_and_duplicates_nothing(
+            self, running_server, tmp_data_dir, monkeypatch):
+        """Live file pre-filled to exactly the cap, then 12 concurrent sends.
+        Record 1 sees `size <= max_bytes` and is appended; record 2 rotates
+        it, so `.1` ends in one whole burst record and the live file holds
+        the other eleven. Which sender lands first is nondeterministic, so
+        the crossing record is asserted by membership, not by sender."""
+        srv, port, token = running_server
+        monkeypatch.setattr(shared, "MESSAGES_LOG_MAX_BYTES", 4096)
+        live = tmp_data_dir / "messages.log"
+        r = _prefill_live_log(live, 4096)
+        delivered = await self._burst(port, token, self.N, 1)
+        backup = _read_records(tmp_data_dir / "messages.log.1")
+        assert len(backup) == r + 1
+        assert backup[-1]["msg_id"] in delivered
+        assert len(_read_records(live)) == self.N - 1
+        burst_logged = [m for m in _logged_ids(tmp_data_dir) if not m.startswith("pre")]
+        assert Counter(burst_logged) == Counter(delivered)
+        assert not (tmp_data_dir / "messages.log.2").exists()
+
+    async def test_record_that_crosses_the_cap_lands_whole_in_the_live_file(
+            self, running_server, tmp_data_dir, monkeypatch):
+        """Rotation is decided *before* the append, so the record that pushes
+        the file past the cap goes to the live `messages.log`, which may
+        therefore exceed the cap by one record; the *next* record's rotation
+        moves it whole into `.1`. With the order reversed the first record
+        would already be in `.1` — this is the test that would fail."""
+        srv, port, token = running_server
+        monkeypatch.setattr(shared, "MESSAGES_LOG_MAX_BYTES", 4096)
+        live = tmp_data_dir / "messages.log"
+        _prefill_live_log(live, 4096)
+        a, b = await _connect(port), await _connect(port)
+        try:
+            await _hello(a, token, name="alpha")
+            await _hello(b, token, name="beta")
+            await _send_op(a, "send", to="beta", text="first")
+            first = await _recv_until(b, "msg")
+            assert first["op"] == "msg", first
+            assert not (tmp_data_dir / "messages.log.1").exists()
+            assert live.stat().st_size > 4096
+            live_recs = _read_records(live)
+            assert live_recs[-1]["msg_id"] == first["msg_id"]
+            crossing_line = live.read_text(encoding="utf-8").splitlines()[-1]
+
+            await _send_op(a, "send", to="beta", text="second")
+            second = await _recv_until(b, "msg")
+            assert second["op"] == "msg", second
+            backup_lines = (tmp_data_dir / "messages.log.1").read_text(
+                encoding="utf-8").splitlines()
+            assert backup_lines[-1] == crossing_line
+            live_recs = _read_records(live)
+            assert [r["msg_id"] for r in live_recs] == [second["msg_id"]]
+        finally:
+            await a.close()
+            await b.close()
+
+    async def test_append_failure_is_logged_not_swallowed(
+            self, running_server, tmp_data_dir, monkeypatch, caplog):
+        """A failed append used to be `except OSError: pass`, so a `cont`
+        pointer could name a record that was never written and nothing
+        anywhere said so. Delivery must still proceed (a log failure never
+        blocks the bus) and the failure must reach `server.log`: one WARNING
+        on `hubbub.server` naming the `msg_id` and the path. The path is
+        under a directory that does not exist, so `open(..., "a")` raises
+        for root too — no `chmod 000`, no geteuid skip."""
+        srv, port, token = running_server
+        missing = tmp_data_dir / "missing" / "messages.log"
+        monkeypatch.setattr(shared, "messages_log_path", lambda: missing)
+        a, b = await _connect(port), await _connect(port)
+        try:
+            await _hello(a, token, name="alpha")
+            await _hello(b, token, name="beta")
+            with caplog.at_level(logging.WARNING, logger="hubbub.server"):
+                await _send_op(a, "send", to="beta", text="lost to disk")
+                frame = await _recv_until(b, "msg")
+            assert frame["op"] == "msg", frame
+        finally:
+            await a.close()
+            await b.close()
+        warnings = [r for r in caplog.records
+                    if r.name == "hubbub.server" and r.levelno == logging.WARNING]
+        assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+        assert frame["msg_id"] in warnings[0].getMessage()
+        assert str(missing) in warnings[0].getMessage()
+        assert not (tmp_data_dir / "messages.log").exists()
+        assert not missing.exists()
 
 
 class TestSessionIdValidation:
