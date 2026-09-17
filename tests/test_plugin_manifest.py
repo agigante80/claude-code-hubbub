@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -93,6 +94,35 @@ class TestMonitorsJson:
     def test_command_uses_plugin_root(self):
         m = json.loads((REPO / "monitors" / "monitors.json").read_text())[0]
         assert "${CLAUDE_PLUGIN_ROOT}" in m["command"]
+
+    def test_substituted_command_names_an_existing_script(self):
+        """Every other test here asserts on the command *literal*. This one
+        asserts on the substitution *result* — the thing CC actually runs.
+
+        A literal that reads correctly and resolves to a file that is not
+        there is the silent-dead-monitor shape: CC spawns it, the interpreter
+        exits 2 into a file nobody opens, and the session is simply not on the
+        bus. `tests/test_cc_harness.py` spawns this same argv for real; this
+        is the cheap static half.
+        """
+        m = json.loads((REPO / "monitors" / "monitors.json").read_text())[0]
+        argv = shlex.split(m["command"].replace("${CLAUDE_PLUGIN_ROOT}", str(REPO)))
+        assert argv == ["python3", str(BIN_DIR / "client.py"), "--from-monitor"]
+        assert Path(argv[1]).is_file()
+
+    def test_substituted_command_has_no_unresolved_tokens(self):
+        """`${CLAUDE_PLUGIN_ROOT}` is the only token CC substitutes into a
+        monitor command. A second one — `${user_config.port}` being the
+        tempting example, already refused by CC and guarded above — would
+        survive this substitution and reach the shell verbatim, where it
+        expands to the empty string and silently changes the argv.
+        """
+        m = json.loads((REPO / "monitors" / "monitors.json").read_text())[0]
+        substituted = m["command"].replace("${CLAUDE_PLUGIN_ROOT}", str(REPO))
+        assert "${" not in substituted, (
+            f"unresolved substitution token survives into the shell: "
+            f"{substituted!r}"
+        )
 
     def test_command_does_not_hardcode_userconfig_args(self):
         """Hardcoded `--port` / `--idle-shutdown-minutes` would override the
