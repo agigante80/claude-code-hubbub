@@ -1,0 +1,8 @@
+# Things this project has decided it may show. Tracked and public on purpose.
+# Keys: root, prefix, email (public scanner); skip (both).
+# NEVER put a private NAME here — the file is public, and a name would be an index.
+root proj
+# tests/test_shared.py:984,1000,1002: single-letter placeholder fixture user
+prefix /Users/x
+# tests/test_shared.py:1963: fictional placeholder fixture user
+prefix /home/doctorwho
