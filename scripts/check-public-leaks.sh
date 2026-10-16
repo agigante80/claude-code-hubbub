@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# check-public-leaks-version: 35
-#
-# NO `awk -v` IN THIS FILE (#259). `-v` runs a backslash-escape pass over its value, and the temp
-# paths this scanner hands to awk (`types`, `labels`) are built under `mktemp -d`, so they carry
-# whatever the caller's TMPDIR is named. Under a TMPDIR named `t\tx` (backslash, t) the paths read
-# back with a TAB, every `getline` failed, and `--history` reported CLEAN over a committed finding.
-# Every value now reaches awk through ENVIRON (`LG_*`); the 0-or-1 flags (`orphans`) moved as
-# hardening only. The suite counts zero `awk ... -v` lines (scripts/awkv-count.sh, continuations
-# joined), and no awk takes a file operand (#405): under a TMPDIR named `x=y` one was an assignment.
+# check-public-leaks-version: 38
 #
 # The public half of the leak guard: home paths, unlisted "~/" roots and reachable addresses.
 #
@@ -185,6 +177,13 @@
 # in the project that runs it, which keeps the exemption visible in that project's own config
 # rather than hidden in this file.
 
+# NO `awk -v` IN THIS FILE (#259). `-v` runs a backslash-escape pass over its value, and the temp
+# paths this scanner hands to awk (`types`, `labels`) are built under `mktemp -d`, so they carry
+# whatever the caller's TMPDIR is named. Under a TMPDIR named `t\tx` (backslash, t) the paths read
+# back with a TAB, every `getline` failed, and `--history` reported CLEAN over a committed finding.
+# Every value now reaches awk through ENVIRON (`LG_*`); the 0-or-1 flags (`orphans`) moved as
+# hardening only. The suite counts zero `awk ... -v` lines (scripts/awkv-count.sh, continuations
+# joined), and no awk takes a file operand (#405): under a TMPDIR named `x=y` one was an assignment.
 set -uo pipefail
 
 # --- portability ------------------------------------------------------------
@@ -446,7 +445,14 @@ if [ -n "$ALLOW_FILE" ]; then
         esac
         ALLOW_ROOTS+=("$val"); PLACEHOLDER_USERS+=("$val") ;;
       email)  ALLOW_EMAILS+=("$val") ;;
-      skip)   SKIP_PATHS+=("$val") ;;
+      # skip_by_name() compares a skip value QUOTED, as an exact path or a slash-anchored suffix,
+      # so `*` and `?` are literal there and a value holding one is a dead entry that reads as a
+      # glob. Refused, as check-private-leaks.sh refuses it, so one shared line has one meaning
+      # (#226). `[` is NOT refused: `app/[slug]/page.tsx` is a real path and matches literally.
+      skip)
+        case "$val" in *[*?]*) die "$ALLOW_FILE:$lineno: skip is matched as an exact path or a path suffix, so a wildcard could never match: $val" ;; esac
+        case "$val" in */) die "$ALLOW_FILE:$lineno: skip names a file, so a value ending in / could never match: $val" ;; esac
+        SKIP_PATHS+=("$val") ;;
       # REFUSE rather than skip the entry. A silently ignored line in a security config is a guard
       # that reports a coverage it does not have, which is the failure this whole component exists
       # to end.
@@ -588,10 +594,10 @@ report() { printf '%s:%s: %s: %s\n' "$1" "$2" "$3" "$4"; violations=$((violation
 # slice: a negative length in ${s:0:k} is an error on bash 3.2, and on bash 5 too for a length-0
 # input (k = -2), so lengths 0 to 2 print the input itself, exactly as ${1:0:2} always did.
 # Characters, not bytes, in every locale (#416): the UTF-8 lead bytes, i.e. every byte but the 0x80 to
-# 0xBF continuation bytes, so `${#n}` (bytes under C, characters under UTF-8) never decides a verdict.
+# 0xBF continuation bytes, so the length no longer depends on the locale (`${#n}` is bytes under C, characters under UTF-8).
 # Sets CHARS. The tr is pinned to C because only under C is it a byte filter (a multibyte-aware tr
 # can reject these bytes); the count after it needs no pin, since what is left holds no continuation
-# byte and reads as one unit per byte in any locale. One tr, so it is linear in any locale (#217);
+# byte and reads as one unit per byte (verified for C and UTF-8 only). One tr, so it is linear in any locale (#217);
 # the trailing x keeps $( ) from eating a final newline.
 char_len() {
   local t
@@ -599,21 +605,25 @@ char_len() {
   CHARS=$(( ${#t} - 1 ))
 }
 # redact keeps two whole characters (#416): a lead byte and its continuation bytes, twice, then one
-# star per remaining character. `local LC_ALL=C` makes ${n:i:1} index bytes whatever the caller's
-# locale. On bash 5.2 the unpinned function prints the same for every input tried, so the pin is
-# determinism for a bash that reads an invalid sequence as one character, and the suite pins it as
-# text (a ledger row), not as behaviour: no row can fail it here.
+# star per remaining character. `local LC_ALL=C` makes the match and the slice count bytes whatever the caller's
+# locale; the single regex match below is linear (a `%%` strip of each run is quadratic, 13 s at
+# 1 MB), and the awk `redact` in --history is the reference for malformed input: a leading
+# continuation byte is kept without counting, a run of any length is kept whole. The pin is
+# behaviour (#439): the suite's malformed-name rows differ without it under a UTF-8 caller. Scope
+# of the mask: in a single-byte encoding such as Windows-1252, bytes 0x80 to 0xBF include letters,
+# so the report can show up to the whole name (a 3-letter name such as Ziz with carons prints
+# unmasked); the awk copy does the same.
 redact() {
-  local LC_ALL=C n="$1" CHARS i=0 j cc=0 k s='*'
+  local LC_ALL=C n="$1" CHARS k p='' c nc re s='*'
   char_len "$n"; k=$(( CHARS - 2 ))
   if [ "$k" -le 0 ]; then printf '%s' "$n"; return; fi
-  while [ "$cc" -lt 2 ]; do   # two whole characters: a lead byte plus at most 3 continuation bytes
-    i=$(( i + 1 )); j=0
-    while [ "$j" -lt 3 ] && [[ "${n:i:1}" == [$'\200'-$'\277'] ]]; do i=$(( i + 1 )); j=$(( j + 1 )); done
-    cc=$(( cc + 1 ))
-  done
+  # The kept prefix in ONE anchored match: any leading continuation bytes, a lead byte and its
+  # continuation bytes, twice. The classes sit in variables, the bash 3.2 form. A failed match
+  # leaves p empty, so the name prints as stars only (fail closed): rc 2 keeps a stale BASH_REMATCH.
+  c=$'[\200-\277]'; nc=$'[^\200-\277]'; re="^$c*$nc$c*$nc$c*"
+  [[ $n =~ $re ]] && p=${BASH_REMATCH[0]}
   while [ ${#s} -lt "$k" ]; do s="$s$s"; done
-  printf '%s%s' "${n:0:i}" "${s:0:k}"
+  printf '%s%s' "$p" "${s:0:k}"
 }
 show_evidence() {  # show_evidence <rule> <evidence>: what the report prints for it
   if [ "$MODE" != history ] || [ "$SHOW_EVIDENCE" = 1 ]; then printf '%s' "$2"; return; fi

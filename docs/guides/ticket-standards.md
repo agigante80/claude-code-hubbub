@@ -1,5 +1,5 @@
 <!-- template-version: 6 -->
-<!-- doc-rules-version: 20 -->
+<!-- doc-rules-version: 21 -->
 
 # Ticket standards (canonical)
 
