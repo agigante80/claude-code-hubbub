@@ -1,4 +1,5 @@
 <!-- template-version: 6 -->
+<!-- doc-rules-version: 20 -->
 
 # Ticket standards (canonical)
 
@@ -12,6 +13,11 @@ The `template-version` marker above says *which form set this doc describes*. It
 version-locked to the four templates by `scripts/check-template-lockstep.sh` (run in CI by
 `.github/workflows/template-lockstep.yml`), so the standard cannot silently drift apart from
 the forms that implement it. Bump it only together with the templates.
+
+The `doc-rules-version` marker answers a different question: *which revision the rules text
+below is at* (it tracks forge-kit's canonical doc). A change to the rules that does not change
+the form fields bumps **only** `doc-rules-version`. That costs nothing downstream and does not
+make `ticket-gate` re-synthesise open tickets, which a `template-version` bump does.
 
 ## Why single-source
 

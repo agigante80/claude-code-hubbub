@@ -28,10 +28,13 @@ bash "$S/sync-labels.sh" --labels .github/labels.yml --check    # report drift, 
 ## Area labels — at least one per work ticket
 
 These are the five names from the gate's built-in area set that describe surfaces this project
-actually has. **Do not add project-specific area names** (`client`, `protocol`, …): the gate's
-mechanical check tests labels against its built-in set and is not handed a project one, so a
-custom area passes Step 0b and then fails check 2 on every ticket. What each built-in name
-means *here*:
+actually has. The gate's mechanical check reads the first column of the table under the exact
+`### Area labels` heading below, and that set REPLACES its built-in nine. The heading must stay
+an h3 spelled exactly that way: a doc with no such table silently falls back to the built-in
+nine. A new area name goes in this table and in `labels.yml` together. What each name means
+*here*:
+
+### Area labels
 
 | Label | Means in this codebase | Typical files |
 |---|---|---|
