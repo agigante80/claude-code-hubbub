@@ -1,5 +1,6 @@
 <!-- template-version: 6 -->
 <!-- doc-rules-version: 21 -->
+<!-- adapted: headings 3 and 4 carry the kit titles so the gate's by-title citations (forge-kit #510) resolve; the parentheticals keep this project's framing. Not a doc-rules bump: that marker tracks upstream. -->
 
 # Ticket standards (canonical)
 
@@ -78,7 +79,7 @@ the regression it prevents. Tests follow `docs/coding-standards.md` → *Tests*:
 (never a bare `time.sleep()` before an assertion, never a bare `readline()`), and
 `coverage_env()` spliced into every new clean-env subprocess call site.
 
-### 3. Integration / subprocess test specs
+### 3. E2E test specs (integration / subprocess)
 
 There is no UI here; the equivalent of E2E is a subprocess test that spawns a real monitor or
 server and asserts on its stdout via `read_line`. For any behaviour a running session would
@@ -92,7 +93,7 @@ The ticket also states which interpreters the test must pass under: a green `mak
 
 <!-- adapt-dropped: emulator-clause -->
 
-### 4. Data handling
+### 4. Personal data handling (data handling)
 
 This project has no accounts and no regulated personal data: single user, single machine,
 localhost only. What it *does* persist is fixed and short, and the ticket states, for each item
